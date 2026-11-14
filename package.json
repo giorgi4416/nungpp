@@ -1,0 +1,21 @@
+{
+  "name": "hungaroring-gp",
+  "version": "1.0.0",
+  "description": "HUNGARORING GP - Racing Challenge. A 3D Formula racing game built with Three.js and Rapier.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "sim": "node tools/sim-test.mjs"
+  },
+  "dependencies": {
+    "@dimforge/rapier3d-compat": "^0.21.0",
+    "@fontsource/titillium-web": "^5.3.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
+    "vite": "^8.3.8"
+  }
+}
