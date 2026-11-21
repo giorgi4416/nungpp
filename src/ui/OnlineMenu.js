@@ -88,6 +88,7 @@ export class OnlineMenu {
     this.visible = false;
     this.svc.unwatchRoomList();
     clearInterval(this._netTimer);
+    clearInterval(this._listTimer);
     this.onClose && this.onClose();
   }
 
@@ -96,9 +97,11 @@ export class OnlineMenu {
     this.view = view;
     this.node.querySelectorAll('[data-view]').forEach((b) => b.classList.toggle('active', b.dataset.view === view));
     this.node.querySelector('[data-view=lobby]').disabled = !this.session;
+    clearInterval(this._listTimer);
     if (view === 'browse' && this.svc.ready) {
-      this.svc.watchRoomList(() => this._refreshRooms());
+      this.svc.watchRoomList(() => this._refreshRooms()); // live: Realtime postgres_changes
       this._refreshRooms();
+      this._listTimer = setInterval(() => this._refreshRooms(), 10000); // safety net (also drops rooms whose host vanished)
     } else this.svc.unwatchRoomList();
     clearInterval(this._netTimer);
     this._netTimer = setInterval(() => this._renderNet(), 1000);
