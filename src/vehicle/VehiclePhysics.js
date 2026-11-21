@@ -5,8 +5,14 @@ import * as THREE from 'three';
  *
  * - Chassis: dynamic rigid body with low centre of mass and realistic inertia.
  * - 4 ray-cast wheels: front steer, rear drive, all brake, spring/damper suspension.
- * - Arcade layer: aero downforce & drag, speed-sensitive steering, 8-speed auto gearbox,
- *   power curve, off-track drag/grip, yaw-stability & anti-roll assists.
+ * - Arcade layer: aero downforce & drag, speed-sensitive steering, 8-speed gearbox
+ *   (automatic, or manual with rev limiter and over-rev protection), power curve,
+ *   off-track drag/grip, yaw-stability & anti-roll assists.
+ * - Visual-state layer: per-wheel brake disc temperature (drives the glow only, never grip),
+ *   wheel slip for smoke & rubber marks, kerb chatter and floor-contact detection.
+ * - Era spec (power / downforce / drag / grip / gearbox) and crash-damage effects
+ *   (lost wings, damaged suspension, lost wheels, engine damage). Both are neutral
+ *   for an undamaged 2020 car, so the baseline handling is unchanged.
  *
  * Local frame: +Z forward, +Y up, -X right (Three.js object convention).
  * The body origin sits at wheel-axle height.
@@ -33,6 +39,9 @@ export const CAR_SPEC = {
 };
 
 const _q = new THREE.Quaternion();
+const _w = new THREE.Vector3();
+const _rp = new THREE.Vector3();
+const _av = new THREE.Vector3();
 const _v = new THREE.Vector3();
 const _fwd = new THREE.Vector3();
 const _up = new THREE.Vector3();
@@ -76,6 +85,7 @@ export class VehiclePhysics {
         .setContactForceEventThreshold(9000);
       return world.createCollider(cd, this.body);
     };
+    this.colliderNames = ['tub', 'sidepods', 'frontWing', 'rearWing'];
     this.colliders = [
       mk(0.5, 0.26, 2.45, 0, 0.16, -0.1), // tub & engine cover
       mk(0.86, 0.17, 0.8, 0, 0.08, -0.35), // sidepods
@@ -126,6 +136,27 @@ export class VehiclePhysics {
     this.lastImpact = 0;
     this.wheelSpin = [0, 0, 0, 0];
     this.onGearChange = null;
+    this.onShiftRejected = null;
+
+    // driver settings
+    this.transmission = 'auto'; // 'auto' | 'manual'
+    this.steerSensitivity = 1;
+    this.limiter = false;
+
+    // visual state (never feeds back into grip)
+    this.ambient = 25;
+    this.brakeTemp = [25, 25, 25, 25];
+    this.wheelSlip = [0, 0, 0, 0]; // sliding speed (m/s) per wheel, for marks & smoke
+    this.wheelSpinUp = [0, 0, 0, 0];
+    // era performance spec + crash damage effects
+    this.spec = { ...CAR_SPEC, gripMul: 1, eraDownforce: 1, eraDrag: 1, eraPower: 1 };
+    this.dmg = null;
+    this.repair();
+    this.compression = [0, 0, 0, 0]; // 0 = extended, 1 = fully compressed
+    this.bottoming = 0;
+    this.onKerb = 0;
+    this._kerbDist = 0;
+    this._engineForce = 0;
 
     // interpolation state
     this.prevPos = new THREE.Vector3(p.x, p.y, p.z);
@@ -134,9 +165,84 @@ export class VehiclePhysics {
     this.currQuat = q.clone();
   }
 
+  /** Which part of the car a collider handle belongs to (for crash damage), or null. */
+  partOf(handle) {
+    for (let i = 0; i < this.colliders.length; i++) if (this.colliders[i].handle === handle) return this.colliderNames[i];
+    return null;
+  }
+
   /** surfaceFn(x, z) -> 0 road, 1 kerb, 2 verge, 3 grass, 4 gravel */
   setSurfaceSampler(fn) {
     this.surfaceFn = fn;
+  }
+
+  /** Brakes cold again (new session). Kept under the old name for callers. */
+  resetThermals(ambient = this.ambient) {
+    this.ambient = ambient;
+    for (let i = 0; i < 4; i++) this.brakeTemp[i] = ambient + 60;
+  }
+
+  /**
+   * Era performance: {gears, maxRpm, idleRpm, power, downforce, drag, grip} multipliers/overrides.
+   * The 2020 spec is the unchanged baseline.
+   */
+  setEra(era) {
+    const S = this.spec;
+    S.gears = era.gears || CAR_SPEC.gears;
+    S.maxRpm = era.maxRpm || CAR_SPEC.maxRpm;
+    S.idleRpm = era.idleRpm || CAR_SPEC.idleRpm;
+    S.eraPower = era.power ?? 1;
+    S.eraDownforce = era.downforce ?? 1;
+    S.eraDrag = era.drag ?? 1;
+    S.gripMul = era.grip ?? 1;
+    if (this.gear > S.gears.length - 1) this.gear = S.gears.length - 1;
+  }
+
+  /** Clear all crash damage effects (respawn / repair). */
+  repair() {
+    this.dmg = { frontAero: 1, rearAero: 1, drag: 1, power: 1, steerBias: 0, wheelGrip: [1, 1, 1, 1], wheelLost: [false, false, false, false], suspSoft: [1, 1, 1, 1] };
+    if (!this.vc) return;
+    for (let i = 0; i < 4; i++) {
+      this.vc.setWheelSuspensionRestLength(i, CAR_SPEC.suspRest);
+      this.vc.setWheelMaxSuspensionForce(i, 60000);
+      this.vc.setWheelRadius(i, this.wheels[i].r);
+    }
+  }
+
+  /** Apply damage effects computed by the damage model. */
+  applyDamage(effects) {
+    Object.assign(this.dmg, effects);
+    for (let i = 0; i < 4; i++) {
+      if (this.dmg.wheelLost[i]) {
+        // no wheel: that corner sits on the chassis
+        this.vc.setWheelSuspensionRestLength(i, 0.0);
+        this.vc.setWheelMaxSuspensionForce(i, 0);
+        this.vc.setWheelRadius(i, 0.05);
+      }
+    }
+  }
+
+  shiftUp() {
+    if (this.transmission !== 'manual' || this.locked) return false;
+    if (this.gear >= this.spec.gears.length - 1) { this.onShiftRejected && this.onShiftRejected(); return false; }
+    this.gear++;
+    this.shiftTimer = 0.05;
+    this.onGearChange && this.onGearChange(this.gear, true);
+    return true;
+  }
+
+  shiftDown() {
+    if (this.transmission !== 'manual') return false;
+    if (this.gear <= 1) { this.onShiftRejected && this.onShiftRejected(); return false; }
+    // refuse a downshift that would over-rev the engine
+    const S = this.spec;
+    const kmh = Math.abs(this.speed) * 3.6;
+    const rpm = S.idleRpm + (kmh / S.gears[this.gear - 1]) * (S.maxRpm - S.idleRpm);
+    if (rpm > S.maxRpm * 1.03) { this.onShiftRejected && this.onShiftRejected(); return false; }
+    this.gear--;
+    this.shiftTimer = 0.05;
+    this.onGearChange && this.onGearChange(this.gear, false);
+    return true;
   }
 
   reset(position, quaternion) {
@@ -158,7 +264,7 @@ export class VehiclePhysics {
 
   /** Called before world.step() at a fixed timestep. */
   preStep(dt) {
-    const S = CAR_SPEC;
+    const S = this.spec;
     const body = this.body;
     const vc = this.vc;
     const r = body.rotation();
@@ -191,11 +297,12 @@ export class VehiclePhysics {
 
     // ---- steering: speed sensitive ----
     const steerLimit = THREE.MathUtils.lerp(0.36, 0.065, smooth01(kmh / 260));
-    const target = this.steer * steerLimit;
-    const rate = (Math.abs(target) > Math.abs(this.steerAngle) ? 2.4 : 3.6) * (0.5 + steerLimit);
+    const sens = this.steerSensitivity;
+    const target = THREE.MathUtils.clamp(this.steer * sens, -1, 1) * steerLimit;
+    const rate = (Math.abs(target) > Math.abs(this.steerAngle) ? 2.4 : 3.6) * (0.5 + steerLimit) * (0.75 + 0.25 * sens);
     this.steerAngle += THREE.MathUtils.clamp(target - this.steerAngle, -rate * dt, rate * dt);
-    vc.setWheelSteering(0, this.steerAngle);
-    vc.setWheelSteering(1, this.steerAngle);
+    vc.setWheelSteering(0, this.steerAngle + this.dmg.steerBias);
+    vc.setWheelSteering(1, this.steerAngle + this.dmg.steerBias);
 
     // ---- gearbox ----
     this._updateGearbox(dt, kmh, speed);
@@ -206,10 +313,21 @@ export class VehiclePhysics {
     if (!locked) {
       if (this.throttle > 0) {
         const v = Math.max(Math.abs(speed), 4);
-        const powerLimited = S.power / v;
-        const rpmN = (this.rpm - S.idleRpm) / (S.maxRpm - S.idleRpm);
-        const torqueShape = 0.86 + 0.14 * Math.sin(Math.min(1, rpmN) * Math.PI * 0.9);
-        engine = Math.min(S.maxEngineForce, powerLimited) * torqueShape * this.throttle;
+        if (this.transmission === 'manual') {
+          // power depends on where the engine sits in its rev range for the selected gear
+          const top = S.gears[this.gear] / 3.6;
+          const frac = Math.abs(speed) / top;
+          let p = 0.25 + 0.75 * Math.min(1, frac) ** 0.8;
+          if (frac < 0.3 && this.gear > 2) p *= 0.35 + (frac / 0.3) * 0.65; // lugging in too high a gear
+          engine = Math.min(S.maxEngineForce, (S.power * p) / Math.max(v, top * 0.22)) * this.throttle;
+          this.limiter = frac >= 0.99;
+          if (frac >= 1) engine = 0; // on the limiter: fuel cut, no more drive in this gear
+        } else {
+          const powerLimited = S.power / v;
+          const rpmN = (this.rpm - S.idleRpm) / (S.maxRpm - S.idleRpm);
+          const torqueShape = 0.86 + 0.14 * Math.sin(Math.min(1, rpmN) * Math.PI * 0.9);
+          engine = Math.min(S.maxEngineForce, powerLimited) * torqueShape * this.throttle;
+        }
         if (this.shiftTimer > 0) engine *= 0.35;
         if (off > 0) engine *= 1 - 0.25 * off;
       }
@@ -218,6 +336,8 @@ export class VehiclePhysics {
         engine = -3200 * this.brake;
       }
     }
+    engine *= S.eraPower * this.dmg.power;
+    this._engineForce = engine;
     vc.setWheelEngineForce(0, 0);
     vc.setWheelEngineForce(1, 0);
     vc.setWheelEngineForce(2, engine * 0.5);
@@ -230,24 +350,49 @@ export class VehiclePhysics {
     if (this.handbrake) brake = Math.max(brake, S.maxBrake * 1.4);
     if (!locked && this.throttle === 0 && this.brake === 0) brake = 0.06; // engine braking / rolling resistance
     for (let i = 0; i < 4; i++) vc.setWheelBrake(i, brake * (i < 2 ? 0.56 : 0.44) * 2);
+    this._brakeCmd = locked ? 0 : brake / S.maxBrake;
+
+    // ---- aero platform: springs stiffen with downforce so the floor does not slam the road at 300 km/h
+    const stiff = 46 + 0.005 * speed * speed;
 
     // ---- grip by surface ----
     for (let i = 0; i < 4; i++) {
       const sfc = this.surface[i];
       const base = i < 2 ? 2.5 : 2.6;
       const mul = sfc === 4 ? 0.45 : sfc === 3 ? 0.62 : sfc === 2 ? 0.92 : 1;
-      vc.setWheelFrictionSlip(i, base * mul);
+      vc.setWheelFrictionSlip(i, this.dmg.wheelLost[i] ? 0 : base * mul * S.gripMul * this.dmg.wheelGrip[i]);
+      vc.setWheelSuspensionStiffness(i, stiff * this.dmg.suspSoft[i]);
     }
 
     // ---- aero ----
     body.resetForces(false);
     body.resetTorques(false);
-    const down = S.downforceCoef * speed * speed;
+    const down = S.downforceCoef * S.eraDownforce * speed * speed;
     body.addForce({ x: -_up.x * down, y: -_up.y * down, z: -_up.z * down }, true);
-    let dragK = S.dragCoef * vAbs;
+    // a missing/damaged wing gives back its share of downforce at that axle (unbalances the car)
+    const tp = body.translation();
+    const lossF = down * 0.36 * (1 - this.dmg.frontAero), lossR = down * 0.42 * (1 - this.dmg.rearAero);
+    if (lossF > 0) body.addForceAtPoint({ x: _up.x * lossF, y: _up.y * lossF, z: _up.z * lossF }, { x: tp.x + _fwd.x * 1.7, y: tp.y + _fwd.y * 1.7, z: tp.z + _fwd.z * 1.7 }, true);
+    if (lossR > 0) body.addForceAtPoint({ x: _up.x * lossR, y: _up.y * lossR, z: _up.z * lossR }, { x: tp.x - _fwd.x * 1.9, y: tp.y - _fwd.y * 1.9, z: tp.z - _fwd.z * 1.9 }, true);
+    let dragK = S.dragCoef * S.eraDrag * this.dmg.drag * vAbs;
     // off-track resistance (grass / gravel)
     dragK += off * 28 + gravel * 260 * Math.min(1, vAbs / 12);
     body.addForce({ x: -_v.x * dragK, y: -_v.y * dragK * 0.2, z: -_v.z * dragK }, true);
+
+    // kerb chatter: alternating vertical kicks at each wheel riding a kerb (one per 2 m stripe)
+    this._kerbDist += Math.abs(speed) * dt;
+    let kerbs = 0;
+    const t0 = body.translation();
+    for (let i = 0; i < 4; i++) {
+      if (this.surface[i] !== 1 || Math.abs(speed) < 4) continue;
+      kerbs++;
+      const w = this.wheels[i];
+      const phase = Math.sin((this._kerbDist / 1.0) * Math.PI + i);
+      const f = 2600 * phase * Math.min(1, Math.abs(speed) / 25);
+      _rp.set(t0.x + _right.x * -w.x + _fwd.x * w.z, t0.y, t0.z + _right.z * -w.x + _fwd.z * w.z);
+      body.addForceAtPoint({ x: _up.x * f, y: _up.y * f, z: _up.z * f }, { x: _rp.x, y: _rp.y, z: _rp.z }, true);
+    }
+    this.onKerb = kerbs / 4;
 
     vc.updateVehicle(dt);
   }
@@ -318,6 +463,8 @@ export class VehiclePhysics {
       this.wheelSpin[i] += (fwdSpeed / rad) * dt;
     }
 
+    this._thermals(dt, fwdSpeed);
+
     // interpolation buffers
     this.prevPos.copy(this.currPos);
     this.prevQuat.copy(this.currQuat);
@@ -326,12 +473,62 @@ export class VehiclePhysics {
     this.currQuat.copy(_q);
   }
 
-  _updateGearbox(dt, kmh, speed) {
+  /** Visual state: brake disc temperature (glow), wheel slip (smoke/marks), suspension compression. */
+  _thermals(dt, fwdSpeed) {
     const S = CAR_SPEC;
+    const vc = this.vc;
+    const body = this.body;
+    const v = Math.abs(fwdSpeed);
+    const av = body.angvel();
+    _av.set(av.x, av.y, av.z);
+    const amb = this.ambient;
+    let bottom = 0;
+    for (let i = 0; i < 4; i++) {
+      const wd = this.wheels[i];
+      const contact = vc.wheelIsInContact(i) && !this.dmg.wheelLost[i];
+      // sideways sliding speed of the contact patch (visual only: smoke and rubber marks)
+      _rp.set(_right.x * -wd.x + _fwd.x * wd.z - _up.x * 0.36, _right.y * -wd.x + _fwd.y * wd.z - _up.y * 0.36, _right.z * -wd.x + _fwd.z * wd.z - _up.z * 0.36);
+      _w.crossVectors(_av, _rp).add(_v);
+      const st = i < 2 ? this.steerAngle : 0;
+      const ax = _right.x * Math.cos(st) + _fwd.x * Math.sin(st);
+      const az = _right.z * Math.cos(st) + _fwd.z * Math.sin(st);
+      const latSlip = contact ? Math.abs(_w.x * ax + _w.z * az) : 0;
+      // rear wheelspin estimate (visual only)
+      const load = Math.max(0, vc.wheelSuspensionForce(i) || 0);
+      const limit = Math.max(1, load * 2.6);
+      const spin = i >= 2 && contact ? Math.max(0, Math.min(1, (Math.abs(this._engineForce) * 0.5 - limit * 0.9) / (limit * 0.6))) : 0;
+      this.wheelSpinUp[i] = spin;
+      this.wheelSlip[i] = Math.max(0, latSlip - 0.8) + spin * 6;
+
+      // brake disc temperature: heats with braking intensity x speed, cools with airflow (visual glow)
+      const share = i < 2 ? 0.56 : 0.44;
+      const bh = 9.5 * (this._brakeCmd || 0) * share * 2 * v;
+      const bc = 0.11 * (this.brakeTemp[i] - amb) * (0.3 + v / 45);
+      this.brakeTemp[i] = Math.max(amb, this.brakeTemp[i] + (bh - bc) * dt);
+
+      const len = vc.wheelSuspensionLength(i) ?? S.suspRest;
+      const c = Math.max(0, Math.min(1, (S.suspRest - len) / 0.16));
+      this.compression[i] = c;
+      if (contact && c > 0.82) bottom = Math.max(bottom, (c - 0.82) / 0.18);
+    }
+    this.bottoming = bottom * Math.min(1, v / 40);
+  }
+
+  _updateGearbox(dt, kmh, speed) {
+    const S = this.spec;
     if (this.shiftTimer > 0) this.shiftTimer -= dt;
     const top = S.gears[this.gear];
     const low = S.gears[this.gear - 1] || 0;
     let rpm = S.idleRpm + (kmh / top) * (S.maxRpm - S.idleRpm);
+    if (this.transmission === 'manual') {
+      // the driver selects gears; the engine just follows road speed (limiter at max rpm)
+      if (this.throttle > 0 && kmh < 8 && !this.locked && this.gear <= 2) rpm = Math.max(rpm, 6500 + this.throttle * 2000);
+      if (this.locked && this.throttle > 0) rpm = S.idleRpm + this.throttle * (S.maxRpm - S.idleRpm) * 0.85;
+      if (speed < -0.5) rpm = S.idleRpm + (kmh / 40) * 5000;
+      rpm = Math.min(S.maxRpm * 1.01, rpm);
+      this.rpm += (rpm - this.rpm) * Math.min(1, dt * 22);
+      return;
+    }
     if (speed < -0.5) {
       this.gear = 1;
       rpm = S.idleRpm + (kmh / 40) * 5000;

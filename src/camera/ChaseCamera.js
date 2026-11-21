@@ -25,6 +25,10 @@ export class ChaseCamera {
     this.pitchLag = 0;
     this.initialized = false;
     this.velLag = 0;
+    // player look-around (mouse drag / right stick): orbit offsets and zoom
+    this.orbitYaw = 0;
+    this.orbitPitch = 0;
+    this.zoom = 1;
   }
 
   reset(carPos, carQuat) {
@@ -52,18 +56,23 @@ export class ChaseCamera {
     const sp = Math.min(1, spd / 85);
     // subtle push-back under acceleration, pull-in under braking
     this.velLag += ((ctx.accel || 0) * 0.025 - this.velLag) * Math.min(1, dt * 3);
-    const dist = this.distance + sp * 1.4 + THREE.MathUtils.clamp(this.velLag, -0.35, 0.45);
-    const h = this.height + sp * 0.25;
-    const fx = Math.sin(this.yaw), fz = Math.cos(this.yaw);
+    const dist0 = this.distance + sp * 1.4 + THREE.MathUtils.clamp(this.velLag, -0.35, 0.45);
+    const h0 = this.height + sp * 0.25;
+    // orbit: rotate the boom around the car (yaw) and raise/lower it (pitch), zoom scales its length
+    const boom = Math.hypot(dist0, h0) * this.zoom;
+    const elev = THREE.MathUtils.clamp(Math.atan2(h0, dist0) + this.orbitPitch, 0.03, 1.35);
+    const dist = boom * Math.cos(elev), h = boom * Math.sin(elev);
+    const yaw = this.yaw + this.orbitYaw;
+    const fx = Math.sin(yaw), fz = Math.cos(yaw);
     _desired.set(ctx.carPos.x - fx * dist, ctx.carPos.y + h, ctx.carPos.z - fz * dist);
     // follow the car's slope a bit so crests and dips read well
-    _desired.y += -_fwd.y * dist * 0.6;
+    _desired.y += -_fwd.y * dist * 0.6 * Math.max(0, Math.cos(this.orbitYaw));
     const k = 1 - Math.exp(-dt * this.stiffness * (1 + sp));
     this.position.lerp(_desired, k);
     // hard constraint on distance so the car never escapes at 300 km/h
     _dir.subVectors(this.position, ctx.carPos);
     const d = _dir.length();
-    if (d > dist * 1.25) this.position.copy(ctx.carPos).addScaledVector(_dir, (dist * 1.25) / d);
+    if (d > boom * 1.25) this.position.copy(ctx.carPos).addScaledVector(_dir, (boom * 1.25) / d);
 
     // clipping: barriers/terrain between car and camera
     if (ctx.rayClip) {
@@ -80,7 +89,10 @@ export class ChaseCamera {
       if (this.position.y < gy) this.position.y = gy;
     }
 
-    _look.set(ctx.carPos.x + fx * this.lookAhead, ctx.carPos.y + 0.75 + sp * 0.1, ctx.carPos.z + fz * this.lookAhead);
+    // look-ahead only when the camera is behind the car; when orbiting, focus on the car itself
+    const la = this.lookAhead * Math.max(0, Math.cos(this.orbitYaw)) * (1 - Math.min(1, Math.abs(this.orbitPitch)));
+    const lfx = Math.sin(this.yaw), lfz = Math.cos(this.yaw);
+    _look.set(ctx.carPos.x + lfx * la, ctx.carPos.y + 0.75 + sp * 0.1 - (1 - Math.cos(this.orbitYaw)) * 0.25, ctx.carPos.z + lfz * la);
     _m.lookAt(this.position, _look, THREE.Object3D.DEFAULT_UP);
     this.quaternion.setFromRotationMatrix(_m);
     if (ctx.shake && (ctx.shake.x || ctx.shake.y)) {

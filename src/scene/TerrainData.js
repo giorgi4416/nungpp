@@ -32,11 +32,17 @@ const smoothstep = (a, b, x) => {
 };
 
 export class TerrainData {
-  constructor(track, { size = 3000, res = 240 } = {}) {
+  constructor(track, opts = {}) {
     this.track = track;
     const b = track.bounds;
     this.cx = (b.minX + b.maxX) / 2;
     this.cz = (b.minZ + b.maxZ) / 2;
+    const span = Math.max(b.maxX - b.minX, b.maxZ - b.minZ);
+    const size = opts.size ?? Math.max(3000, Math.round(span + 1800));
+    const res = opts.res ?? Math.min(340, Math.round(size / 12.5));
+    this.theme = track.def.theme || 'valley';
+    this.waterLevel = null;
+    if (this.theme === 'monaco') this._setupCoast();
     this.size = size;
     this.res = res; // cells per side
     this.cellSize = size / res;
@@ -51,7 +57,30 @@ export class TerrainData {
     this._build();
   }
 
+  /** Monaco: land rises from the harbour/sea side (pool, Rascasse) towards Casino and the hairpin. */
+  _setupCoast() {
+    const T = this.track;
+    const at = (names) => {
+      let x = 0, z = 0;
+      for (const n of names) { const c = T.corner(n); const i = Math.round(c.apex / T.ds) % T.count; x += T.pos[i * 3]; z += T.pos[i * 3 + 2]; }
+      return [x / names.length, z / names.length];
+    };
+    const sea = at(['Tabac', 'Piscine II', 'La Rascasse', 'Nouvelle Chicane II']);
+    const land = at(['Casino', 'Grand Hotel Hairpin', 'Mirabeau Haute']);
+    const dx = land[0] - sea[0], dz = land[1] - sea[1];
+    const len = Math.hypot(dx, dz);
+    this.coast = { ox: sea[0] + dx * 0.32, oz: sea[1] + dz * 0.32, nx: dx / len, nz: dz / len };
+    this.waterLevel = -0.7;
+  }
+
   _natural(x, z) {
+    if (this.coast) {
+      const c = this.coast;
+      const along = (x - c.ox) * c.nx + (z - c.oz) * c.nz; // < 0: sea side
+      const n = fbm(x * 0.004, z * 0.004, 4);
+      if (along < 0) return -7 + n * 1.5;
+      return Math.min(150, along * 0.16 + Math.max(0, along - 500) * 0.12) + n * 12 + 1;
+    }
     const b = this.track.bounds;
     // distance outside the track's bounding box (hills rise beyond the circuit)
     const dx = Math.max(b.minX - 120 - x, 0, x - b.maxX - 120);
@@ -60,7 +89,8 @@ export class TerrainData {
     const rim = smoothstep(0, 700, out) * 70 + smoothstep(0, 180, out) * 10;
     const n = fbm(x * 0.0035, z * 0.0035, 4);
     const n2 = fbm(x * 0.012 + 40, z * 0.012 - 13, 3);
-    return rim * (0.75 + 0.5 * n) + n * 9 + n2 * 2.5 + 1.5;
+    const k = this.theme === 'forest' ? 1.6 : this.theme === 'japan' ? 0.75 : 1;
+    return rim * k * (0.75 + 0.5 * n) + n * 9 * k + n2 * 2.5 + 1.5;
   }
 
   /** Full-quality height evaluation at an arbitrary point (used at build time). */
@@ -74,11 +104,25 @@ export class TerrainData {
     // lateral side & flat band width from run-off widths
     const lat = (x - px) * T.right[nearest * 3] + (z - pz) * T.right[nearest * 3 + 2];
     const s = nearest * T.ds;
-    const pitStraight = s < 320 || s > T.length - 450;
+    const pitSide = T.def.pit.side;
+    const pitStraight = T.onPitStraight(s) || T.onPitStraight(s + 30) || T.onPitStraight(s - 30);
     let flat = T.halfWidth + (lat > 0 ? T.runoffR[nearest] : T.runoffL[nearest]) + 7;
-    if (pitStraight && lat > 0) flat = 62; // pit lane & paddock plateau
-    if (pitStraight && lat < 0) flat = Math.max(flat, 24);
+    if (pitStraight && lat * pitSide > 0) flat = 62; // pit lane & paddock plateau
+    if (pitStraight && lat * pitSide < 0) flat = Math.max(flat, 24);
+    // another, lower section of the circuit nearby (Suzuka crossover): the ground follows the lower road
+    const second = T.nearestIndex(x, z, 90, nearest, Math.round(150 / T.ds));
+    if (second >= 0) {
+      const d2 = Math.hypot(x - T.pos[second * 3], z - T.pos[second * 3 + 2]);
+      const th2 = T.pos[second * 3 + 1];
+      const flat2 = T.halfWidth + Math.max(T.runoffL[second], T.runoffR[second]) + 7;
+      if (th2 < th - 2 && d2 < flat2 + 16) return { h: th2 - 0.06, d: Math.min(d, d2) };
+    }
     if (d < flat) return { h: th - 0.06, d };
+    if (this.coast && this._natural(x, z) < 0) {
+      // harbour quay: drop straight into the water just beyond the barriers
+      const q = smoothstep(flat - 2, flat + 6, d);
+      return { h: th - 0.06 + (this._natural(x, z) - th) * q, d };
+    }
     // smooth blended track height from nearby coarse samples
     let ws = 0, hs = 0;
     for (const i of this.coarse) {

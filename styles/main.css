@@ -86,7 +86,8 @@ button { font-family: inherit; cursor: pointer; }
     linear-gradient(90deg, rgba(5, 6, 9, 0.92) 0%, rgba(5, 6, 9, 0.66) 34%, rgba(5, 6, 9, 0) 62%),
     linear-gradient(0deg, rgba(5, 6, 9, 0.7) 0%, rgba(5, 6, 9, 0) 30%);
 }
-.menu.visible { pointer-events: auto; }
+.menu.visible { pointer-events: none; }
+.menu.visible .menu-left, .menu.visible .menu-right { pointer-events: auto; }
 .menu-left {
   position: absolute;
   left: clamp(28px, 6vw, 96px);
@@ -101,7 +102,7 @@ button { font-family: inherit; cursor: pointer; }
 }
 .menu-kicker::before { content: ''; width: 26px; height: 3px; background: var(--red); }
 .menu-title {
-  font-size: clamp(46px, 6.4vw, 92px);
+  font-size: clamp(42px, 5.6vw, 84px);
   line-height: 0.88;
   font-weight: 900;
   font-style: italic;
@@ -112,13 +113,13 @@ button { font-family: inherit; cursor: pointer; }
 .menu-sub-title {
   margin-top: 10px; font-size: clamp(14px, 1.4vw, 19px); font-weight: 700; letter-spacing: 0.55em; color: var(--ink);
 }
-.menu-tagline { margin-top: 18px; color: var(--ink-dim); font-size: 16px; font-style: italic; }
-.menu-buttons { margin-top: 40px; display: flex; flex-direction: column; gap: 8px; }
+.menu-tagline { margin-top: 12px; color: var(--ink-dim); font-size: 16px; font-style: italic; }
+.menu-buttons { margin-top: 26px; display: flex; flex-direction: column; gap: 6px; }
 .menu-btn {
   position: relative;
   display: flex; align-items: center; justify-content: space-between;
   width: 100%;
-  padding: 15px 22px 15px 24px;
+  padding: 12px 22px 12px 24px;
   background: rgba(255, 255, 255, 0.04);
   border: 1px solid var(--panel-line);
   color: var(--ink);
@@ -388,3 +389,81 @@ table.classification .sw { display: inline-block; width: 4px; height: 14px; vert
   .speedo { transform: scale(0.8); transform-origin: bottom right; }
   .minimap { width: 160px; height: 160px; }
 }
+
+/* ------------------------------------------------------------------ HUD badges */
+.trans-badge { font-size: 9px; letter-spacing: 0.12em; padding: 1px 5px; background: rgba(255, 255, 255, 0.1); color: var(--ink-dim); }
+.trans-badge.manual { background: var(--yellow); color: #111; }
+.speedo .gear.limiter { color: #3b8bff; animation: pulse 0.12s infinite; }
+
+/* ------------------------------------------------------------------ selection screens & settings tabs */
+.select-panel { width: min(980px, 95vw); }
+.select-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 20px; }
+.team-card, .track-card {
+  text-align: left; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--panel-line); color: var(--ink);
+  padding: 0 0 12px; overflow: hidden; transition: transform 0.2s var(--ease-out), border-color 0.2s, background 0.2s;
+}
+.team-card:hover, .track-card:hover { transform: translateY(-2px); background: rgba(255, 255, 255, 0.08); }
+.team-card.active, .track-card.active { border-color: var(--red); box-shadow: 0 0 0 2px var(--red) inset; }
+.team-card .livery { height: 54px; }
+.tc-num { font-size: 26px; font-weight: 900; font-style: italic; padding: 6px 14px 0; line-height: 1; }
+.tc-name { font-size: 16px; font-weight: 800; padding: 6px 14px 0; letter-spacing: 0.03em; }
+.tc-meta { font-size: 11px; color: var(--ink-faint); padding: 3px 14px 0; line-height: 1.4; }
+.track-card svg { display: block; width: 100%; height: 130px; background: radial-gradient(ellipse at center, #1a2230, #0d1016); }
+.tc-stats { display: flex; gap: 10px; padding: 6px 14px 0; font-size: 12px; color: var(--ink-dim); font-weight: 600; flex-wrap: wrap; }
+.tc-best { padding: 4px 14px 0; font-size: 12px; color: var(--ink-faint); }
+.tc-best b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.tabs { display: flex; gap: 2px; margin-top: 18px; border-bottom: 1px solid var(--panel-line); flex-wrap: wrap; }
+.tabs button { background: none; border: none; color: var(--ink-faint); font-weight: 800; letter-spacing: 0.16em; font-size: 12px; padding: 10px 14px; border-bottom: 2px solid transparent; }
+.tabs button.active { color: var(--ink); border-bottom-color: var(--red); }
+.settings-panel { width: min(760px, 94vw); }
+.settings-grid .span2 { grid-column: 1 / -1; }
+.bind-list { display: grid; gap: 6px; margin-top: 18px; }
+.bind-row { display: grid; grid-template-columns: 1fr 130px 130px; gap: 8px; align-items: center; font-weight: 600; font-size: 14px; }
+.keybox { background: linear-gradient(180deg, #2a2c33, #17181d); border: 1px solid rgba(255, 255, 255, 0.16); border-bottom-width: 3px; border-radius: 5px; color: #fff; font-weight: 700; font-size: 12px; padding: 7px 8px; letter-spacing: 0.06em; }
+.keybox.listening { background: var(--red); animation: pulse 0.8s infinite; }
+
+@media (max-height: 760px) { .menu-footer { display: none; } .menu-kicker { margin-bottom: 10px; } .menu-tagline { display: none; } }
+
+/* ------------------------------------------------------------------ car selection (docked, live 3D preview on the right) */
+.car-select { z-index: 32; pointer-events: none; }
+.car-select.visible .cs-panel { pointer-events: auto; }
+.cs-panel {
+  position: absolute; left: clamp(16px, 3vw, 48px); top: 50%; transform: translateY(-50%);
+  width: min(470px, 92vw); max-height: 92vh; overflow: auto;
+  background: linear-gradient(180deg, rgba(20, 21, 26, 0.95), rgba(11, 12, 15, 0.95)); border: 1px solid var(--panel-line); border-top: 3px solid var(--red);
+  padding: 24px 26px 20px; backdrop-filter: blur(8px);
+}
+.cs-panel h2 { font-size: 28px; font-weight: 900; font-style: italic; text-transform: uppercase; }
+.cs-panel h2 small { display: block; font-size: 12px; letter-spacing: 0.3em; color: var(--ink-faint); font-style: normal; font-weight: 700; margin-bottom: 4px; }
+.era-tabs { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 16px; }
+.era-tabs button { padding: 12px 6px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--panel-line); color: var(--ink-dim); font-weight: 900; font-style: italic; letter-spacing: 0.08em; font-size: 15px; }
+.era-tabs button.active { background: var(--red); border-color: var(--red); color: #fff; }
+.era-blurb { margin-top: 10px; font-size: 13px; color: var(--ink-faint); line-height: 1.5; }
+.sub-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.sub-chips button { padding: 7px 12px; background: none; border: 1px solid var(--panel-line); color: var(--ink-dim); font-weight: 700; font-size: 12px; letter-spacing: 0.08em; border-radius: 20px; }
+.sub-chips button.active { background: #fff; color: #0b0c0f; }
+.car-list { display: grid; gap: 6px; margin-top: 14px; }
+.car-card { display: flex; align-items: center; gap: 12px; text-align: left; padding: 9px 10px; background: rgba(255, 255, 255, 0.04); border: 1px solid var(--panel-line); color: var(--ink); transition: background 0.2s; }
+.car-card:hover { background: rgba(255, 255, 255, 0.09); }
+.car-card.active { border-color: var(--red); box-shadow: 0 0 0 2px var(--red) inset; }
+.car-card .swatch { width: 54px; height: 30px; flex-shrink: 0; border-radius: 3px; }
+.cc-text b { display: block; font-size: 15px; }
+.cc-text small { color: var(--ink-faint); font-size: 11px; }
+.cs-info { position: absolute; right: clamp(16px, 3vw, 48px); bottom: clamp(20px, 5vh, 48px); width: min(320px, 40vw); background: var(--panel); border: 1px solid var(--panel-line); padding: 14px 16px; pointer-events: none; }
+.ci-era { font-size: 11px; letter-spacing: 0.24em; color: var(--red); font-weight: 800; }
+.ci-name { font-size: 20px; font-weight: 900; font-style: italic; margin: 4px 0 8px; }
+.ci-row { display: flex; justify-content: space-between; font-size: 13px; color: var(--ink-dim); padding: 2px 0; }
+.ci-row b { color: var(--ink); }
+.cs-preview-hint { position: absolute; right: clamp(16px, 3vw, 48px); top: 22px; font-size: 11px; letter-spacing: 0.22em; color: var(--ink-faint); font-weight: 700; pointer-events: none; }
+@media (max-width: 900px) { .cs-info, .cs-preview-hint { display: none; } }
+
+/* ------------------------------------------------------------------ damage panel */
+.dmg-panel { position: absolute; right: 340px; bottom: 22px; width: 132px; padding: 8px 10px 9px; }
+.dmg-title { font-size: 10px; letter-spacing: 0.24em; color: var(--ink-faint); font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+.dmg-car { position: relative; height: 112px; margin-top: 6px; }
+.dmg-car i { position: absolute; background: #19d36a; border-radius: 2px; transition: background 0.3s; }
+.dmg-car i.d1 { background: #ffd21f; } .dmg-car i.d2 { background: #ff8a00; } .dmg-car i.d3 { background: #ff2a1f; }
+.dmg-car i.gone { background: transparent; outline: 1px dashed rgba(255, 255, 255, 0.35); }
+.dmg-level { font-size: 11px; font-weight: 800; letter-spacing: 0.14em; margin-top: 4px; text-align: center; }
+.dmg-level.l0 { color: var(--ink-faint); } .dmg-level.l1, .dmg-level.l2 { color: var(--yellow); } .dmg-level.l3 { color: #ff8a00; } .dmg-level.l4 { color: var(--red); animation: pulse 0.8s infinite; }
+@media (max-width: 1150px) { .dmg-panel { right: 22px; bottom: 210px; } }

@@ -1,32 +1,46 @@
 import { AIDriver } from './AIDriver.js';
-import { FormulaCar, LIVERIES } from '../vehicle/FormulaCar.js';
-
-/** Four fictional rivals with distinct pace and racecraft. */
-export const AI_ROSTER = [
-  { name: 'M. VARGA', short: 'VAR', liveryId: 'aurora', skill: 0.975, aggression: 0.75, launch: 0.22 },
-  { name: 'L. FONTAINE', short: 'FON', liveryId: 'vektor', skill: 0.958, aggression: 0.55, launch: 0.3 },
-  { name: 'K. BRANDT', short: 'BRA', liveryId: 'solaris', skill: 0.944, aggression: 0.6, launch: 0.38 },
-  { name: 'R. OKAFOR', short: 'OKA', liveryId: 'nordwind', skill: 0.93, aggression: 0.85, launch: 0.26 },
-];
+import { FormulaCar } from '../vehicle/FormulaCar.js';
+import { AI_DRIVERS } from '../vehicle/Teams.js';
+import { CAR_BY_ID, carsForSub, SUBERA_BY_ID } from '../vehicle/CarCatalog.js';
 
 export const DIFFICULTY = { easy: 0.92, medium: 0.985, hard: 1.04 };
 
+/** Preferred rival line-up; the player's own team is skipped. */
+const RIVAL_ORDER = ['redbull', 'ferrari', 'mclaren', 'mercedes', 'aston', 'alpine', 'williams', 'haas'];
+
 export class AIOpponentManager {
-  constructor(RAPIER, world, scene, track) {
+  constructor(RAPIER, world, scene, track, playerCarId) {
     this.track = track;
-    this.drivers = AI_ROSTER.map((p) => {
-      const livery = LIVERIES.find((l) => l.id === p.liveryId);
-      const car = new FormulaCar(livery);
-      scene.add(car.root);
-      const d = new AIDriver(RAPIER, world, track, car, p);
-      d.livery = livery;
-      return d;
-    });
+    this.scene = scene;
+    this.drivers = AI_DRIVERS.map((p) => new AIDriver(RAPIER, world, track, null, p));
     this._list = [];
+    this.eraPace = 1;
+    this.setPlayerCar(playerCarId);
+  }
+
+  /** Rivals drive cars from the same era as the player (any team except the player's). */
+  setPlayerCar(playerCarId) {
+    const player = CAR_BY_ID[playerCarId];
+    const pool = carsForSub(player.sub).filter((c) => c.id !== player.id);
+    pool.sort((a, b) => (RIVAL_ORDER.indexOf(a.teamId) + 1 || 99) - (RIVAL_ORDER.indexOf(b.teamId) + 1 || 99));
+    // older cars have less grip: rivals lap a little slower too
+    this.eraPace = Math.sqrt(SUBERA_BY_ID[player.sub].perf.grip * (0.7 + 0.3 * SUBERA_BY_ID[player.sub].perf.downforce));
+    if (this._difficulty) this.setDifficulty(this._difficulty);
+    this.drivers.forEach((d, i) => {
+      const team = pool[i % pool.length];
+      if (d.livery && d.livery.id === team.id) return;
+      const visible = d.car ? d.car.root.visible : true;
+      if (d.car) d.car.dispose();
+      d.car = new FormulaCar(team);
+      d.car.setVisible(visible);
+      d.livery = team;
+      this.scene.add(d.car.root);
+    });
   }
 
   setDifficulty(name) {
-    const m = DIFFICULTY[name] ?? DIFFICULTY.medium;
+    this._difficulty = name;
+    const m = (DIFFICULTY[name] ?? DIFFICULTY.medium) * this.eraPace;
     for (const d of this.drivers) d.difficulty = m;
   }
 
@@ -48,7 +62,7 @@ export class AIOpponentManager {
   placeOnGrid(slots) {
     this.drivers.forEach((d, i) => {
       const slot = slots[i];
-      d.place(slot.s - this.track.length, slot.lateral); // behind the line: s < 0 unwrapped
+      d.place(slot.s - this.track.length, slot.lateral);
     });
   }
 
@@ -56,12 +70,18 @@ export class AIOpponentManager {
     for (const d of this.drivers) d.release(d.profile.launch + Math.random() * 0.15);
   }
 
-  /** @param others - extra participants (player) [{s, lateral, speed, isPlayer}] */
   fixedUpdate(dt, player) {
     const list = this._list;
     list.length = 0;
     for (const d of this.drivers) list.push({ ref: d, s: d.wrappedS, lateral: d.lateral, speed: d.speed, isPlayer: false });
     if (player) list.push(player);
     for (const d of this.drivers) if (d.enabled !== false) d.fixedUpdate(dt, list);
+  }
+
+  dispose(world) {
+    for (const d of this.drivers) {
+      if (d.car) d.car.dispose();
+      world.removeRigidBody(d.body);
+    }
   }
 }

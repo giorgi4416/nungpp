@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { integrateLayout, elevationAt, TRACK_LENGTH } from './HungaroringLayout.js';
+import { integrateLayout, elevationFromKeys } from './layout.js';
+import { CIRCUITS } from './circuits/index.js';
 
 /**
  * Pure track data (no rendering, no DOM): centreline spline, per-sample frames,
@@ -7,16 +8,17 @@ import { integrateLayout, elevationAt, TRACK_LENGTH } from './HungaroringLayout.
  * Used by rendering, physics, AI, lap timing and the minimap.
  */
 
-export const TRACK_HALF_WIDTH = 6.75; // 13.5 m wide
 export const KERB_WIDTH = 1.4;
 export const SAMPLE_SPACING = 2; // metres
-const START_OFFSET = 330; // start line distance into the main straight
 
 const UP = new THREE.Vector3(0, 1, 0);
 
 export class TrackGeometry {
-  constructor() {
-    this.halfWidth = TRACK_HALF_WIDTH;
+  /** @param def circuit definition (see src/track/circuits) */
+  constructor(def = CIRCUITS.hungaroring) {
+    this.def = def;
+    this.id = def.id;
+    this.halfWidth = def.halfWidth;
     this._buildCentreline();
     this._buildFrames();
     this._buildSpatialHash();
@@ -26,13 +28,29 @@ export class TrackGeometry {
   }
 
   _buildCentreline() {
-    const layout = integrateLayout(undefined, 1);
-    const scale = TRACK_LENGTH / layout.length;
+    const def = this.def;
+    const layout = integrateLayout(def.segments, 1);
+    const scale = def.length / layout.length;
+    const START_OFFSET = def.startOffset;
     const raw = layout.points.map(([x, y]) => [x * scale, y * scale]);
     const n = raw.length;
     // rotate so that index 0 is the start line (START_OFFSET into the main straight).
     // integration begins at the start of the main straight, i.e. the point list index 0.
     const shift = Math.round(START_OFFSET / (layout.length * scale / n));
+    const L0 = layout.length * scale;
+    const cornerU = (d) => ((((d * scale - START_OFFSET) / L0) % 1) + 1) % 1;
+    // elevation: function of lap fraction, or keyframes [[u | cornerName, h], ...]
+    let elevationAt = def.elevation;
+    if (Array.isArray(def.elevation)) {
+      const keys = def.elevation.map(([k, h]) => {
+        if (typeof k === 'number') return [k, h];
+        const c = layout.corners.find((q) => q.name === k);
+        if (!c) throw new Error(`${def.id}: unknown corner in elevation: ${k}`);
+        return [cornerU(c.apex), h];
+      });
+      elevationAt = elevationFromKeys(keys);
+    }
+    this.elevationAt = elevationAt;
     const pts = [];
     for (let i = 0; i < n; i++) pts.push(raw[(i + shift) % n]);
     // centre on origin
@@ -57,7 +75,7 @@ export class TrackGeometry {
     const L = layout.length * scale;
     this.corners = layout.corners.map((c) => {
       const toGame = (d) => ((((d * scale) - START_OFFSET) % L) + L) % L * (this.length / L);
-      return { turn: c.turn, dir: c.dir, start: toGame(c.start), end: toGame(c.end), apex: toGame(c.apex) };
+      return { turn: c.num, name: c.name, dir: c.dir, ang: c.ang, start: toGame(c.start), end: toGame(c.end), apex: toGame(c.apex) };
     });
   }
 
@@ -119,8 +137,23 @@ export class TrackGeometry {
     return (Math.floor(x / this.cell) + 1000) * 4096 + (Math.floor(z / this.cell) + 1000);
   }
 
-  /** Nearest centreline sample to (x,z) within maxR metres (global search). Returns index or -1. */
-  nearestIndex(x, z, maxR = 400, excludeNear = -1, excludeRange = 0) {
+  /** Corner record by name (or turn number). */
+  corner(name) {
+    return this.corners.find((c) => c.name === name || c.turn === name);
+  }
+
+  /** True when distance s lies on the pit straight (between pit entry and exit). */
+  onPitStraight(s) {
+    const p = this.def.pit;
+    s = this.wrapS(s);
+    return s < p.to || s > this.length + p.from;
+  }
+
+  /**
+   * Nearest centreline sample to (x,z) within maxR metres (global search). Returns index or -1.
+   * With y given, sections at a very different height (e.g. Suzuka's crossover) are penalised.
+   */
+  nearestIndex(x, z, maxR = 400, excludeNear = -1, excludeRange = 0, y = null) {
     const c = this.cell;
     const cx = Math.floor(x / c), cz = Math.floor(z / c);
     let best = -1, bestD = maxR * maxR;
@@ -138,7 +171,8 @@ export class TrackGeometry {
               if (di < excludeRange) continue;
             }
             const dx = this.pos[i * 3] - x, dz = this.pos[i * 3 + 2] - z;
-            const d = dx * dx + dz * dz;
+            let d = dx * dx + dz * dz;
+            if (y !== null) { const dy = (this.pos[i * 3 + 1] - y) * 3; d += dy * dy; }
             if (d < bestD) { bestD = d; best = i; }
           }
         }
@@ -154,7 +188,7 @@ export class TrackGeometry {
    * local search; falls back to a global search when the local result is far away.
    * Writes into `out` {index, s, lateral, dist, height}.
    */
-  project(x, z, hint, out = {}) {
+  project(x, z, hint, out = {}, y = null) {
     const N = this.count;
     let best = -1, bestD = Infinity;
     if (hint !== undefined && hint >= 0) {
@@ -166,7 +200,7 @@ export class TrackGeometry {
       }
     }
     if (best < 0 || bestD > 30 * 30) {
-      const g = this.nearestIndex(x, z, 600);
+      const g = this.nearestIndex(x, z, 600, -1, 0, y);
       if (g >= 0) best = g;
       if (best < 0) best = 0;
     }
@@ -257,7 +291,8 @@ export class TrackGeometry {
       const corner = Math.min(1, Math.abs(kMax) * 60);
       // outside of a left turn is the right side
       const outsideRight = kMax > 0;
-      const base = 11, extra = 20 * corner;
+      const R = this.def.runoff;
+      const base = R.base, extra = R.extra * corner;
       left[i] = base + (outsideRight ? extra * 0.25 : extra);
       right[i] = base + (outsideRight ? extra : extra * 0.25);
       // kerbs where the corner is meaningful
@@ -265,29 +300,26 @@ export class TrackGeometry {
       let kNear = 0;
       for (let k = -6; k <= 6; k++) kNear = Math.max(kNear, Math.abs(this.curv[(i + k + N) % N]));
       if (kNear > 1 / 220) { kerbL[i] = 1; kerbR[i] = 1; }
-      if (kHere > 1 / 90 || corner > 0.75) {
+      if (R.gravel && (kHere > 1 / 90 || corner > 0.75)) {
         if (outsideRight) gravelR[i] = 1; else gravelL[i] = 1;
       }
     }
     // limit by clearance (barriers of neighbouring track sections must not cross)
     for (let i = 0; i < N; i++) {
-      const lim = Math.max(4, clear[i] / 2 - this.halfWidth - 6);
+      const lim = Math.max(this.def.runoff.street ? 1.2 : 4, clear[i] / 2 - this.halfWidth - (this.def.runoff.street ? 3 : 6));
       left[i] = Math.min(left[i], lim);
       right[i] = Math.min(right[i], lim);
     }
     // pit straight: right side holds the pit wall close to the track
+    const pit = this.def.pit;
+    const pitArr = pit.side > 0 ? right : left;
     for (let i = 0; i < N; i++) {
-      const s = i * this.ds;
-      const d = Math.min(s, this.length - s);
-      const onPitStraight = s < 300 || s > this.length - 420;
-      if (onPitStraight) { right[i] = 4.5; gravelR[i] = 0; gravelL[i] = 0; }
-      if (d < 600) kerbL[i] = kerbL[i];
+      if (this.onPitStraight(i * this.ds)) { pitArr[i] = pit.wall; gravelR[i] = 0; gravelL[i] = 0; }
     }
     this.runoffL = smoothCircular(left, 10);
     this.runoffR = smoothCircular(right, 10);
     for (let i = 0; i < N; i++) {
-      const s = i * this.ds;
-      if (s < 300 || s > this.length - 420) this.runoffR[i] = 4.5;
+      if (this.onPitStraight(i * this.ds)) (pit.side > 0 ? this.runoffR : this.runoffL)[i] = pit.wall;
     }
     this.kerbL = dilate(kerbL, 5);
     this.kerbR = dilate(kerbR, 5);

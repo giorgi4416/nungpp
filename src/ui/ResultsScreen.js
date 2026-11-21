@@ -9,7 +9,7 @@ export class ResultsScreen {
       <div class="panel results-panel" role="dialog" aria-label="Race results">
         <div class="results-head">
           <div>
-            <h2><small>HUNGARORING · FINAL CLASSIFICATION</small><span data-title>Race Result</span></h2>
+            <h2><small data-sub>FINAL CLASSIFICATION</small><span data-title>Race Result</span></h2>
             <div data-record></div>
           </div>
           <div class="results-pos" data-pos>P1<small>/5</small></div>
@@ -42,6 +42,7 @@ export class ResultsScreen {
   show(summary, rows) {
     const q = this.q;
     const pos = summary.position;
+    q('[data-sub]').textContent = `${(summary.track || '').toUpperCase()} · FINAL CLASSIFICATION`;
     q('[data-title]').textContent = pos === 1 ? 'Victory!' : pos <= 3 ? 'Podium Finish' : 'Race Complete';
     q('[data-pos]').innerHTML = `P${pos}<small>/${summary.total}</small>`;
     q('[data-total]').textContent = formatTime(summary.totalTime);

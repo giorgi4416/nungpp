@@ -90,7 +90,8 @@ function matrixFromFrame(p, forward, scale = _s) {
 }
 
 export class Hungaroring {
-  constructor(scene, track, barriers, quality) {
+  constructor(scene, track, barriers, quality, terrain) {
+    this.terrain = terrain;
     this.scene = scene;
     this.track = track;
     this.barriers = barriers;
@@ -106,6 +107,8 @@ export class Hungaroring {
     this._buildStartLine();
     this._buildGantry();
     this._buildSignage();
+    if (track.def.tunnel) this._buildTunnel();
+    if (terrain) this._buildBridgeDecks();
   }
 
   _mat(params, Type = THREE.MeshStandardMaterial) {
@@ -245,9 +248,10 @@ export class Hungaroring {
     const fenceTex = TX.fenceTexture();
     const fenceMat = this._mat({ map: fenceTex, transparent: false, alphaTest: 0.5, side: THREE.DoubleSide, roughness: 0.6, metalness: 0.5 });
     const fenceMask = new Uint8Array(N);
+    const street = !!T.def.runoff.street;
     for (let i = 0; i < N; i++) {
       const s = i * T.ds;
-      if (s < 650 || s > T.length - 520) fenceMask[i] = 1;
+      if (street || s < T.def.pit.to + 350 || s > T.length + T.def.pit.from - 100) fenceMask[i] = 1;
     }
     const fences = [];
     for (const [line, mask] of [[B.left, fenceMask], [B.right, fenceMask]]) {
@@ -280,7 +284,8 @@ export class Hungaroring {
     const L = T.length;
     const N = T.count;
     const mask = new Uint8Array(N);
-    const start = L - 430, end = 300;
+    const P = T.def.pit;
+    const start = L + P.from - 10, end = P.to;
     for (let i = 0; i < N; i++) {
       const s = i * T.ds;
       if (s >= start || s <= end) mask[i] = 1;
@@ -292,14 +297,20 @@ export class Hungaroring {
       const k = Math.min(1, d / 90, (total - d) / 90);
       return k;
     };
-    const inner = (i) => 11.6 + (17 - 11.6) * lane(i);
-    const outer = (i) => 11.6 + (28 - 11.6) * lane(i);
+    // pit lane sits behind the pit wall on the pit side, merging at entry and exit
+    const sgn = P.side;
+    const w0 = T.halfWidth + P.wall + 0.35;
+    const innerAbs = (i) => w0 + 5.4 * lane(i);
+    const outerAbs = (i) => w0 + 16.4 * lane(i);
+    const inner = (i) => sgn * innerAbs(i);
+    const outer = (i) => sgn * outerAbs(i);
+    this.pitLaneOffset = sgn * (w0 + 10.9);
     const geo = ribbonGeometry(T, inner, outer, { y: -0.01, vLen: 13.5, mask });
     const uv = geo.attributes.uv;
     for (let i = 0; i < uv.count; i++) uv.setX(i, uv.getX(i) * 0.98 + 0.01);
     this._add(geo, this._mat({ map: TX.asphaltTexture(), color: 0xd0d0d0, roughness: 0.9, ...offsetMat(2) }), { name: 'pitlane' });
     // pit lane centre line (white)
-    const line = ribbonGeometry(T, (i) => inner(i) + 3.9, (i) => inner(i) + 4.1, { y: 0.0, vLen: 8, mask });
+    const line = ribbonGeometry(T, (i) => sgn * (innerAbs(i) + 3.9), (i) => sgn * (innerAbs(i) + 4.1), { y: 0.0, vLen: 8, mask });
     this._add(line, this._mat({ color: 0xf0f0f0, roughness: 0.6, ...offsetMat(4) }), { name: 'pitline' });
     this.pitRange = { start, end };
   }
@@ -445,8 +456,8 @@ export class Hungaroring {
       board(TX.signTexture(String(c.turn), { bg: '#ffffff', fg: '#111111', sub: 'TURN', w: 256, h: 256, italic: false, border: '#e10600' }), 1.6, 1.6, c.start - 5, side, 2.2, 2.6, 0.55);
     }
     // braking boards before the heavy stops
-    for (const turn of [1, 2, 5, 6, 12, 13, 14]) {
-      const c = T.corners.find((q) => q.turn === turn);
+    for (const turn of T.def.brakingBoards || []) {
+      const c = T.corner(turn);
       if (!c) continue;
       const side = c.dir > 0 ? 1 : -1;
       for (const d of [150, 100, 50]) {
@@ -454,6 +465,109 @@ export class Hungaroring {
       }
     }
     this.group.add(signs);
+  }
+
+  /** Monaco tunnel: walls, roof, lamp strips; exposes `tunnelRange` for the lighting change. */
+  _buildTunnel() {
+    const T = this.track;
+    const B = this.barriers;
+    const tdef = T.def.tunnel;
+    const s0 = T.wrapS(T.corner(tdef.from).end + (tdef.fromOffset || 0));
+    const s1 = T.wrapS(T.corner(tdef.to).start + (tdef.toOffset || 0));
+    this.tunnelRange = { start: s0, end: s1 };
+    const N = T.count;
+    const i0 = Math.round(s0 / T.ds), i1 = Math.round(s1 / T.ds);
+    const count = (i1 - i0 + N) % N;
+    const H = 6.4;
+    const wallPos = [], roofPos = [], lampPos = [];
+    const idxW = [], idxR = [], idxL = [];
+    for (let k = 0; k <= count; k++) {
+      const i = (i0 + k) % N;
+      const lx = B.left[i * 3] - T.right[i * 3] * 0.3, lz = B.left[i * 3 + 2] - T.right[i * 3 + 2] * 0.3;
+      const rx = B.right[i * 3] + T.right[i * 3] * 0.3, rz = B.right[i * 3 + 2] + T.right[i * 3 + 2] * 0.3;
+      const y = T.pos[i * 3 + 1];
+      wallPos.push(lx, y - 0.5, lz, lx, y + H, lz, rx, y - 0.5, rz, rx, y + H, rz);
+      roofPos.push(lx, y + H, lz, rx, y + H, rz, lx, y + H + 1.6, lz, rx, y + H + 1.6, rz);
+      // lamp strip down the centre of the ceiling
+      const cx = T.pos[i * 3], cz = T.pos[i * 3 + 2];
+      const tx = T.right[i * 3] * 0.35, tz = T.right[i * 3 + 2] * 0.35;
+      lampPos.push(cx - tx, y + H - 0.05, cz - tz, cx + tx, y + H - 0.05, cz + tz);
+      if (k > 0) {
+        const p = (k - 1) * 4, c = k * 4;
+        idxW.push(p, c, p + 1, p + 1, c, c + 1, p + 2, p + 3, c + 2, p + 3, c + 3, c + 2);
+        idxR.push(p, p + 1, c, p + 1, c + 1, c, p + 2, c + 2, p + 3, p + 3, c + 2, c + 3);
+        const pl = (k - 1) * 2, cl = k * 2;
+        if (k % 6 < 3) idxL.push(pl, cl, pl + 1, pl + 1, cl, cl + 1);
+      }
+    }
+    const mk = (pos, idx) => {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      g.setIndex(idx);
+      g.computeVertexNormals();
+      return g;
+    };
+    const wallMat = this._mat({ map: TX.concreteTexture(), color: 0x8a8580, roughness: 0.95, side: THREE.DoubleSide });
+    const roofMat = this._mat({ color: 0x4a4744, roughness: 1, side: THREE.DoubleSide });
+    const lampMat = this._mat({ color: 0xffd9a0, emissive: 0xffc070, emissiveIntensity: 3.5, side: THREE.DoubleSide });
+    this._add(mk(wallPos, idxW), wallMat, { cast: true, name: 'tunnel-walls' });
+    this._add(mk(roofPos, idxR), roofMat, { cast: true, name: 'tunnel-roof' });
+    this._add(mk(lampPos, idxL), lampMat, { receive: false, name: 'tunnel-lamps' });
+    // a hotel block sits on top of the tunnel
+    const mid = (i0 + Math.round(count / 2)) % N;
+    const mx = T.pos[mid * 3], my = T.pos[mid * 3 + 1], mz = T.pos[mid * 3 + 2];
+    const hotel = new THREE.Mesh(new THREE.BoxGeometry(Math.min(300, count * T.ds * 0.7), 22, 46), this._mat({ map: TX.facadeTexture(), roughness: 0.6 }));
+    hotel.position.set(mx - T.right[mid * 3] * 34, my + H + 12.5, mz - T.right[mid * 3 + 2] * 34);
+    hotel.rotation.y = Math.atan2(T.tan[mid * 3], T.tan[mid * 3 + 2]) + Math.PI / 2;
+    hotel.castShadow = true;
+    this.group.add(hotel);
+  }
+
+  /** Is distance s inside the tunnel? */
+  inTunnel(s) {
+    const r = this.tunnelRange;
+    if (!r) return false;
+    return r.start < r.end ? s > r.start && s < r.end : s > r.start || s < r.end;
+  }
+
+  /** Where the road runs above the ground (Suzuka's crossover) add a deck slab and pillars. */
+  _buildBridgeDecks() {
+    const T = this.track;
+    const B = this.barriers;
+    const N = T.count;
+    const parts = [];
+    const pillars = [];
+    const off = (p, dy) => [p[0], p[1] + dy, p[2]];
+    for (let i = 0; i < N; i++) {
+      const y = T.pos[i * 3 + 1];
+      const gy = this.terrain.heightAt(T.pos[i * 3], T.pos[i * 3 + 2]);
+      if (y - gy < 1.6) continue;
+      const j = (i + 1) % N;
+      const at = (line, k) => [line[k * 3], line[k * 3 + 1], line[k * 3 + 2]];
+      const a = at(B.left, i), b = at(B.right, i), c = at(B.left, j), d = at(B.right, j);
+      const top = -0.08, bot = -1.3;
+      // underside
+      parts.push(...off(a, bot), ...off(b, bot), ...off(c, bot), ...off(b, bot), ...off(d, bot), ...off(c, bot));
+      // sides
+      for (const [p0, p1] of [[a, c], [b, d]]) {
+        parts.push(...off(p0, top), ...off(p0, bot), ...off(p1, top), ...off(p0, bot), ...off(p1, bot), ...off(p1, top));
+      }
+      if (i % 9 === 0) for (const p of [a, b]) pillars.push([p[0], gy, p[2], Math.max(0.5, y - 1.3 - gy)]);
+    }
+    if (!parts.length) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(parts, 3));
+    g.computeVertexNormals();
+    const mat = this._mat({ map: TX.concreteTexture(), color: 0xb0aca6, roughness: 0.9, side: THREE.DoubleSide });
+    this._add(g, mat, { cast: true, name: 'bridge-deck' });
+    const pg = new THREE.BoxGeometry(1.2, 1, 1.2);
+    pg.translate(0, 0.5, 0);
+    const im = new THREE.InstancedMesh(pg, mat, pillars.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion(), v = new THREE.Vector3(), sc = new THREE.Vector3();
+    pillars.forEach(([x, y, z, h], k) => im.setMatrixAt(k, m.compose(v.set(x, y, z), q, sc.set(1, h, 1))));
+    im.castShadow = true;
+    this.group.add(im);
+    this.bridgeCount = pillars.length;
   }
 
   addSectorBoards(sectorStarts) {

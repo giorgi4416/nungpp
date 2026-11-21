@@ -4,13 +4,14 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { TrackGeometry } from '../src/track/TrackGeometry.js';
+import { CIRCUITS } from '../src/track/circuits/index.js';
 import { TerrainData } from '../src/scene/TerrainData.js';
 import { computeBarrierLines, createTrackColliders } from '../src/track/TrackColliders.js';
 import { VehiclePhysics } from '../src/vehicle/VehiclePhysics.js';
 
 await RAPIER.init();
 const t0 = performance.now();
-const track = new TrackGeometry();
+const track = new TrackGeometry(CIRCUITS[process.env.TRACK || 'hungaroring']);
 const terrain = new TerrainData(track);
 const barriers = computeBarrierLines(track);
 console.log('track+terrain build ms', (performance.now() - t0).toFixed(0));
@@ -27,6 +28,8 @@ function placeAt(s, lat) {
 }
 const start = placeAt(track.length - 20, 0);
 const car = new VehiclePhysics(RAPIER, world, { position: start.p, quaternion: start.q });
+car.resetThermals(CIRCUITS[process.env.TRACK || 'hungaroring'].ambient);
+if (process.env.MANUAL) { car.transmission = 'manual'; car.onGearChange = () => {}; }
 const proj = {};
 car.setSurfaceSampler((x, z) => {
   track.project(x, z, proj.index ?? 0, proj);
@@ -34,11 +37,11 @@ car.setSurfaceSampler((x, z) => {
 });
 
 const eq = new RAPIER.EventQueue(true);
-let impacts = 0;
+let impacts = 0; const impactLog = [];
 function step() {
   car.preStep(DT);
   world.step(eq);
-  eq.drainContactForceEvents((e) => { if (e.totalForceMagnitude() > 20000) impacts++; });
+  eq.drainContactForceEvents((e) => { if (e.totalForceMagnitude() > 20000) { impacts++; if (impactLog.length < 12) impactLog.push(Math.round(proj.s ?? 0) + '@' + Math.round(e.totalForceMagnitude() / 1000) + 'kN/c' + car.compression.map((c) => c.toFixed(2)).join(',')); } });
   car.postStep(DT);
 }
 
@@ -52,7 +55,7 @@ const laps = Number(process.argv[2] || 1);
 const hp = {};
 let t = 0, maxKmh = 0, t100 = null, offTime = 0, minUp = 1;
 let lastS = null, dist = 0, lapStart = null, lapTimes = [];
-let maxLatErr = 0; const offLog = [];
+let maxLatErr = 0; const maxTemps = { t: 0, b: 0 }; const offLog = [];
 const target = new THREE.Vector3();
 const skill = Number(process.argv[3] || 1.0);
 const SIM_MAX = 400;
@@ -95,13 +98,17 @@ while (t < SIM_MAX && lapTimes.length < laps) {
   t += DT;
   const kmh = car.speed * 3.6;
   maxKmh = Math.max(maxKmh, kmh);
+  maxTemps.b = Math.max(maxTemps.b, ...car.brakeTemp);
   if (t100 === null && kmh >= 100) t100 = t;
   if (car.offTrack > 0) { if (!offLog.length || t - offLog[offLog.length-1].t > 2) offLog.push({ t: +t.toFixed(1), s: Math.round(s), v: Math.round(kmh), vt: Math.round(vt*3.6), lat: +hp.lateral.toFixed(1) }); offTime += DT; }
   minUp = Math.min(minUp, car.upright);
   maxLatErr = Math.max(maxLatErr, Math.abs(hp.lateral));
-  if (Math.round(t / DT) % 1200 === 0) console.log(`t=${t.toFixed(0)}s s=${s.toFixed(0)} dist=${dist.toFixed(0)} v=${kmh.toFixed(0)}km/h gear=${car.gear} rpm=${car.rpm.toFixed(0)} lat=${hp.lateral.toFixed(1)} y=${b.y.toFixed(2)}`);
+  if (Math.round(t / DT) % 1200 === 0) console.log(`brakes=${car.brakeTemp.map((x) => x.toFixed(0)).join('/')} t=${t.toFixed(0)}s s=${s.toFixed(0)} dist=${dist.toFixed(0)} v=${kmh.toFixed(0)}km/h gear=${car.gear} rpm=${car.rpm.toFixed(0)} lat=${hp.lateral.toFixed(1)} y=${b.y.toFixed(2)}`);
 }
 console.log('off-track events', JSON.stringify(offLog));
+maxTemps.b = maxTemps.b.toFixed(0);
+console.log('impacts at s:', impactLog.join('  '));
+console.log('max brake disc temp', maxTemps.b, 'transmission', car.transmission);
 console.log({ lapTimes: lapTimes.map((x) => x.toFixed(2)), t100: t100?.toFixed(2), maxKmh: maxKmh.toFixed(0), offTime: offTime.toFixed(1), minUp: minUp.toFixed(3), impacts, maxLatErr: maxLatErr.toFixed(1), dist: dist.toFixed(0) });
 
 // --- 3. braking test from current max on a fresh straight run ---

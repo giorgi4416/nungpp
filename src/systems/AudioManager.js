@@ -148,6 +148,13 @@ export class AudioManager {
     this.noiseBurst(0.12, { gain: g * 0.6, freq: 2600, q: 1.5 });
     this.tone(70, 0.3, { type: 'sine', gain: g * 0.8, slideTo: 40 });
   }
+  /** Crash: heavy thump + carbon crack + scraping debris, scaled by damage level (1..4). */
+  crash(strength = 1, level = 1) {
+    this.impact(Math.min(1, strength));
+    const n = 1 + level * 2;
+    for (let i = 0; i < n; i++) this.noiseBurst(0.04 + Math.random() * 0.05, { gain: 0.12 + level * 0.05, freq: 1800 + Math.random() * 2600, q: 3, when: 0.03 + i * (0.03 + Math.random() * 0.05) });
+    if (level >= 3) this.noiseBurst(0.6, { gain: 0.22, freq: 900, q: 0.6, when: 0.08 });
+  }
   lapChime(best = false) {
     const notes = best ? [880, 1108.7, 1318.5] : [880, 1108.7];
     notes.forEach((f, i) => this.tone(f, 0.25, { type: 'triangle', gain: 0.1, when: i * 0.09 }));

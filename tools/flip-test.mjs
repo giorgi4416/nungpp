@@ -3,12 +3,13 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { TrackGeometry } from '../src/track/TrackGeometry.js';
+import { CIRCUITS } from '../src/track/circuits/index.js';
 import { TerrainData } from '../src/scene/TerrainData.js';
 import { computeBarrierLines, createTrackColliders } from '../src/track/TrackColliders.js';
 import { VehiclePhysics } from '../src/vehicle/VehiclePhysics.js';
 
 await RAPIER.init();
-const track = new TrackGeometry();
+const track = new TrackGeometry(CIRCUITS[process.env.TRACK || 'hungaroring']);
 const terrain = new TerrainData(track);
 const barriers = computeBarrierLines(track);
 const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });

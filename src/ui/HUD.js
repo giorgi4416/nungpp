@@ -8,7 +8,7 @@ import { TrackMap } from '../track/TrackMap.js';
  * and animated notifications. DOM writes are cached to avoid layout churn.
  */
 export class HUD {
-  constructor(root, track, checkpoints) {
+  constructor(root) {
     const h = (this.node = el('section', 'screen hud'));
     h.innerHTML = `
       <div class="hud-top-left">
@@ -51,6 +51,22 @@ export class HUD {
         <div class="readout"><div class="spd" data-spd>0</div><div class="unit">KM/H</div></div>
         <div class="gear" data-gear>N</div>
       </div>
+      <div class="hud-box dmg-panel" data-status>
+        <div class="dmg-title">CAR <span data-trans class="trans-badge">AUTO</span></div>
+        <div class="dmg-car">
+          <i data-part="frontWing" style="left:14px;right:14px;top:0;height:7px"></i>
+          <i data-part="nose" style="left:50px;width:12px;top:9px;height:22px"></i>
+          <i data-part="corner0" style="left:4px;width:18px;top:12px;height:24px"></i>
+          <i data-part="corner1" style="right:4px;width:18px;top:12px;height:24px"></i>
+          <i data-part="sidepodL" style="left:30px;width:14px;top:42px;height:34px"></i>
+          <i data-part="sidepodR" style="right:30px;width:14px;top:42px;height:34px"></i>
+          <i data-part="engine" style="left:48px;width:16px;top:33px;height:50px;opacity:.85"></i>
+          <i data-part="corner2" style="left:2px;width:22px;top:72px;height:28px"></i>
+          <i data-part="corner3" style="right:2px;width:22px;top:72px;height:28px"></i>
+          <i data-part="rearWing" style="left:32px;right:32px;top:104px;height:8px"></i>
+        </div>
+        <div class="dmg-level l0" data-dmg-level>NO DAMAGE</div>
+      </div>
       <div class="hud-center" data-toasts></div>
       <div class="hud-hint" data-hint></div>
     `;
@@ -62,6 +78,8 @@ export class HUD {
       race: q('[data-race]'), raceRow: q('[data-race-row]'), sectors: [...h.querySelectorAll('.sector')],
       rev: q('[data-rev]'), spd: q('[data-spd]'), gear: q('[data-gear]'), leds: q('[data-leds]'), ledList: [...h.querySelectorAll('[data-leds] i')],
       toasts: q('[data-toasts]'), hint: q('[data-hint]'),
+      trans: q('[data-trans]'),
+      parts: Object.fromEntries([...h.querySelectorAll('[data-part]')].map((n) => [n.dataset.part, n])), dmgLevel: q('[data-dmg-level]'),
     };
     // speedo ticks
     const ticks = q('[data-ticks]');
@@ -74,10 +92,15 @@ export class HUD {
     }
     ticks.innerHTML = t;
     this.e.ledList.forEach((led, i) => led.dataset.c = i < 5 ? 'g' : i < 10 ? 'r' : 'b');
-    this.map = new TrackMap(q('[data-map]'), track, checkpoints.sectorEnds);
+    this.mapCanvas = q('[data-map]');
     this.cache = new Map();
     this._towerTimer = 0;
     this._toastCount = 0;
+  }
+
+  /** Switch the minimap to a new circuit. */
+  setTrack(track, checkpoints) {
+    this.map = new TrackMap(this.mapCanvas, track, checkpoints.sectorEnds);
   }
 
   _set(node, key, text) {
@@ -97,8 +120,10 @@ export class HUD {
     if (v) requestAnimationFrame(() => this.map.resize());
   }
 
-  setMode(mode, totalLaps) {
+  setMode(mode, totalLaps, transmission = 'auto') {
     this.mode = mode;
+    this.e.trans.textContent = transmission === 'manual' ? 'MANUAL' : 'AUTO';
+    this.e.trans.classList.toggle('manual', transmission === 'manual');
     this.totalLaps = totalLaps;
     this.cache.clear();
     this.e.tower.style.display = mode === 'race' ? '' : 'none';
@@ -144,11 +169,28 @@ export class HUD {
     // speedo
     this._set(e.spd, 'spd', String(Math.round(d.speedKmh)));
     this._set(e.gear, 'gear', d.gear);
+    if (this.cache.get('lim') !== d.limiter) { this.cache.set('lim', d.limiter); e.gear.classList.toggle('limiter', !!d.limiter); }
+    // damage diagram (4 Hz is plenty)
+    this._statusT = (this._statusT || 0) - dt;
+    if (d.damage && this._statusT <= 0) {
+      this._statusT = 0.25;
+      const D = d.damage;
+      const cls = (h) => (h < 0 ? 'gone' : h > 0.85 ? '' : h > 0.55 ? 'd1' : h > 0.25 ? 'd2' : 'd3');
+      const set = (k, h) => { const n = e.parts[k]; const c = cls(h); if (n.className !== c) n.className = c; };
+      set('frontWing', D.frontWing); set('nose', D.nose); set('rearWing', D.rearWing);
+      set('sidepodL', D.sidepodL); set('sidepodR', D.sidepodR); set('engine', D.engine);
+      D.corner.forEach((h, i) => set('corner' + i, h));
+      const names = ['NO DAMAGE', 'MINOR DAMAGE', 'MODERATE DAMAGE', 'SEVERE DAMAGE', 'TERMINAL · PRESS R'];
+      this._set(e.dmgLevel, 'dmgl', names[D.level]);
+      const lc = 'dmg-level l' + D.level;
+      if (e.dmgLevel.className !== lc) e.dmgLevel.className = lc;
+    }
     const rpmN = Math.max(0, Math.min(1, (d.rpm - 3000) / (d.rpmMax - 3000)));
     const dash = (rpmN * 100).toFixed(1);
     if (this.cache.get('rev') !== dash) { this.cache.set('rev', dash); e.rev.setAttribute('stroke-dasharray', `${dash} 100`); }
-    const ledN = d.rpm < 8800 ? 0 : Math.min(15, Math.ceil(((d.rpm - 8800) / (12250 - 8800)) * 15));
-    const flash = d.rpm > 12250 && d.gear !== '8';
+    const ledLo = d.rpmMax * 0.7, ledHi = d.rpmMax * 0.98;
+    const ledN = d.rpm < ledLo ? 0 : Math.min(15, Math.ceil(((d.rpm - ledLo) / (ledHi - ledLo)) * 15));
+    const flash = d.rpm > ledHi && d.gear !== String(d.topGear);
     const key = ledN + (flash ? 'f' : '');
     if (this.cache.get('leds') !== key) {
       this.cache.set('leds', key);

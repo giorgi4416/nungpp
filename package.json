@@ -1,14 +1,19 @@
 {
   "name": "hungaroring-gp",
   "version": "1.0.0",
-  "description": "HUNGARORING GP - Racing Challenge. A 3D Formula racing game built with Three.js and Rapier.",
+  "description": "HUNGARORING GP - Racing Challenge. A 3D Formula racing game (Three.js + Rapier) with four circuits, team cars, tyre/brake thermals and manual gearbox.",
   "type": "module",
   "private": true,
   "scripts": {
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "sim": "node tools/sim-test.mjs"
+    "sim": "node tools/sim-test.mjs",
+    "test:brakes": "node tools/brake-gearbox-test.mjs",
+    "test:damage": "node tools/damage-test.mjs",
+    "test:tracks": "node tools/track-report.mjs",
+    "test:rollover": "node tools/flip-test.mjs",
+    "test:race": "node tools/race-sim.mjs 4 150"
   },
   "dependencies": {
     "@dimforge/rapier3d-compat": "^0.21.0",

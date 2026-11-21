@@ -1,14 +1,13 @@
 /**
- * Ordered checkpoints and the three timing sectors.
- * Sector 1: start line -> between T4 and T5
- * Sector 2: -> between T11 and T12
- * Sector 3: -> finish line
+ * Ordered checkpoints and the three timing sectors. Sector boundaries come
+ * from the circuit definition (`sectors: [cornerA, cornerB]`): each sector
+ * ends shortly after the exit of the named corner.
  */
-export function buildCheckpoints(track, count = 28) {
+export function buildCheckpoints(track, count = Math.max(24, Math.round(track.length / 160))) {
   const L = track.length;
-  const c = (n) => track.corners.find((q) => q.turn === n);
-  const s1End = (c(4).end + c(5).start) / 2;
-  const s2End = (c(11).end + c(12).start) / 2;
+  const [a, b] = track.def.sectors.map((n) => track.corner(n));
+  const s1End = track.wrapS(a.end + 40);
+  const s2End = track.wrapS(b.end + 40);
   const list = [];
   for (let i = 0; i < count; i++) list.push((i / count) * L);
   // insert sector boundaries as checkpoints

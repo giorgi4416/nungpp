@@ -5,6 +5,7 @@
 import RAPIER from '@dimforge/rapier3d-compat';
 import * as THREE from 'three';
 import { TrackGeometry } from '../src/track/TrackGeometry.js';
+import { CIRCUITS } from '../src/track/circuits/index.js';
 import { TerrainData } from '../src/scene/TerrainData.js';
 import { computeBarrierLines, createTrackColliders } from '../src/track/TrackColliders.js';
 import { VehiclePhysics } from '../src/vehicle/VehiclePhysics.js';
@@ -14,7 +15,7 @@ import { AIDriver } from '../src/ai/AIDriver.js';
 const SEEDS = Number(process.argv[2] || 6);
 const SECONDS = Number(process.argv[3] || 200);
 await RAPIER.init();
-const track = new TrackGeometry();
+const track = new TrackGeometry(CIRCUITS[process.env.TRACK || 'hungaroring']);
 const terrain = new TerrainData(track);
 const barriers = computeBarrierLines(track);
 const DT = 1 / 120;

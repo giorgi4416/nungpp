@@ -50,6 +50,8 @@ export class Environment {
     this.group.name = 'environment';
     scene.add(this.group);
     this.uniforms = { uTime: { value: 0 }, uExcite: { value: 0.2 } };
+    this.theme = track.def.theme || 'valley';
+    this.pitSide = track.def.pit.side;
     this.exclusions = []; // circles {x, z, r} where trees must not grow
     this.crowd = [];
 
@@ -67,8 +69,10 @@ export class Environment {
     this._buildCrowd();
     this._buildBillboards();
     this._buildMarshalPosts();
-    this._buildBridge();
+    if (track.def.bridge) this._buildBridge();
     this._buildFlags();
+    if (this.theme === 'monaco') this._buildCoast();
+    if (this.theme === 'japan') this._buildFerrisWheel();
     this._buildTrees();
   }
 
@@ -112,6 +116,11 @@ export class Environment {
       // darker on high hills (forest floor feel)
       const hk = Math.min(1, Math.max(0, (y - 20) / 60));
       base.multiplyScalar(1 - hk * 0.18);
+      if (this.theme === 'monaco') {
+        // terraced Mediterranean hillside: stone and dry scrub rather than lawns
+        tmp.setRGB(1.25, 1.12, 0.95);
+        base.lerp(tmp, 0.55 * Math.min(1, Math.max(0, (d - 25) / 60)));
+      } else if (this.theme === 'forest') base.multiplyScalar(0.9);
       col[i * 3] = base.r; col[i * 3 + 1] = base.g; col[i * 3 + 2] = base.b;
     }
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
@@ -160,8 +169,13 @@ export class Environment {
     const glass = new THREE.MeshStandardMaterial({ map: facade, roughness: 0.25, metalness: 0.3 });
     const dark = new THREE.MeshStandardMaterial({ color: 0x23252b, roughness: 0.5, metalness: 0.4 });
 
-    // pit garages (ground floor) along the pit lane: s from -230 to +190
-    const len = 420, mid = -20;
+    // pit garages along the pit lane, behind the pit wall on the pit side
+    const P = this.track.def.pit;
+    const ps = P.side;
+    const len = Math.min(420, P.to - P.from - 120), mid = (P.to + P.from) / 2;
+    const laneOuter = this.track.halfWidth + P.wall + 0.35 + 16.4;
+    const sp = (along, lat, y) => this.straightPoint(along, ps * lat, y);
+    const gz = laneOuter + 9;
     garage.repeat.set(len / 26, 1);
     const garageMat = new THREE.MeshStandardMaterial({ map: garage, roughness: 0.6 });
     const facadeL = facade.clone();
@@ -169,27 +183,28 @@ export class Environment {
     facadeL.repeat.set(len / 20, 1);
     const glassL = new THREE.MeshStandardMaterial({ map: facadeL, roughness: 0.25, metalness: 0.3 });
     // BoxGeometry material order: +x, -x, +y, -y, +z (away from track), -z (track side)
-    const gz = 37;
-    this._box(len, 6, 16, [white, white, concrete, concrete, white, garageMat], this.straightPoint(mid, gz, 3), t);
-    this._box(len, 6.5, 14, [glass, glass, concrete, concrete, glassL, glassL], this.straightPoint(mid, gz + 0.8, 9.25), t);
+    // the garage door face must point at the pit lane whichever side it is on
+    const fwd = ps > 0 ? t : t.clone().multiplyScalar(-1);
+    this._box(len, 6, 16, [white, white, concrete, concrete, white, garageMat], sp(mid, gz, 3), fwd);
+    this._box(len, 6.5, 14, [glass, glass, concrete, concrete, glassL, glassL], sp(mid, gz + 0.8, 9.25), fwd);
     // roof canopy
-    this._box(len + 6, 0.5, 20, [dark, dark, white, dark, dark, dark], this.straightPoint(mid, gz - 1, 12.75), t);
-    this.exclusions.push({ x: this.straightPoint(mid, gz).x, z: this.straightPoint(mid, gz).z, r: len / 2 + 20, line: true, a: this.straightPoint(-260, gz), b: this.straightPoint(220, gz), w: 45 });
+    this._box(len + 6, 0.5, 20, [dark, dark, white, dark, dark, dark], sp(mid, gz - 1, 12.75), fwd);
+    this.exclusions.push({ x: sp(mid, gz).x, z: sp(mid, gz).z, r: len / 2 + 20, line: true, a: sp(mid - len / 2 - 40, gz), b: sp(mid + len / 2 + 40, gz), w: 45 });
 
     // paddock & hospitality blocks behind
     const colors = [0xe10600, 0x0e8f8a, 0xff7a00, 0x3a3d9f, 0x222222];
     for (let k = 0; k < 6; k++) {
       const m = new THREE.MeshStandardMaterial({ color: colors[k % colors.length], roughness: 0.5, metalness: 0.2 });
-      this._box(32, 8, 14, [glass, glass, m, m, glass, glass], this.straightPoint(-200 + k * 70, 66, 4), t);
+      this._box(32, 8, 14, [glass, glass, m, m, glass, glass], sp(mid - len / 2 + 20 + k * (len / 6), gz + 29, 4), fwd);
     }
 
     // control tower near the start line with circuit name
-    const sign = new THREE.MeshStandardMaterial({ map: TX.signTexture('HUNGARORING', { bg: '#0d0e12', fg: '#ffffff', w: 1024, h: 192 }), roughness: 0.5, emissive: 0x111111 });
-    this._box(16, 24, 14, [glass, glass, concrete, concrete, glass, glass], this.straightPoint(70, 56, 12), t);
-    this._box(22, 4, 1, [dark, dark, dark, dark, dark, sign], this.straightPoint(70, 48.5, 26), t);
+    const sign = new THREE.MeshStandardMaterial({ map: TX.signTexture(this.track.def.name.toUpperCase(), { bg: '#0d0e12', fg: '#ffffff', w: 1024, h: 192 }), roughness: 0.5, emissive: 0x111111 });
+    this._box(16, 24, 14, [glass, glass, concrete, concrete, glass, glass], sp(mid + 90, gz + 19, 12), fwd);
+    this._box(22, 4, 1, [dark, dark, dark, dark, dark, sign], sp(mid + 90, gz + 11.5, 26), fwd);
 
     // podium balcony
-    this._box(14, 0.4, 4, [white, white, white, white, white, white], this.straightPoint(20, 28.5, 9), t);
+    this._box(14, 0.4, 4, [white, white, white, white, white, white], sp(mid + 40, gz - 8.5, 9), fwd);
   }
 
   // ---------------------------------------------------------------- grandstands
@@ -271,27 +286,14 @@ export class Environment {
     const seatMats = [0x2a64b8, 0xd0202a, 0x1f8c4a, 0xe8e8e8].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.6 }));
     const roofMat = new THREE.MeshStandardMaterial({ color: 0xf0f1f3, roughness: 0.4, metalness: 0.3 });
     const colMat = new THREE.MeshStandardMaterial({ color: 0x8b9099, roughness: 0.4, metalness: 0.6 });
-    const corner = (n) => T.corners.find((c) => c.turn === n);
-    const stands = [
-      // main grandstand opposite the pits
-      { s: 0, side: -1, length: 280, rows: 20, roof: true, gap: 9 },
-      { s: -260, side: -1, length: 140, rows: 14, roof: false, gap: 9 },
-      // turn 1 outside (left of a right-hander)
-      { s: corner(1).start - 70, side: -1, length: 110, rows: 16, roof: true, gap: 6 },
-      { s: corner(1).apex + 20, side: -1, length: 80, rows: 12, roof: false, gap: 6 },
-      // turn 2/3
-      { s: corner(2).apex, side: 1, length: 90, rows: 12, roof: false, gap: 8 },
-      // turn 4 crest
-      { s: corner(4).start - 30, side: 1, length: 110, rows: 14, roof: true, gap: 8 },
-      // turn 5
-      { s: corner(5).apex, side: -1, length: 90, rows: 12, roof: false, gap: 8 },
-      // chicane 6/7
-      { s: corner(6).start - 60, side: -1, length: 100, rows: 12, roof: true, gap: 6 },
-      // turn 11/12
-      { s: corner(12).start - 60, side: -1, length: 120, rows: 14, roof: true, gap: 7 },
-      // final corner
-      { s: corner(14).apex, side: -1, length: 110, rows: 14, roof: true, gap: 8 },
-    ];
+    const stands = (T.def.grandstands || []).map((g) => {
+      if (g.at === undefined) return g;
+      const c = T.corner(g.at);
+      const base = g.ref === 'apex' ? c.apex : c.start;
+      const side = g.side === 'out' ? (c.dir > 0 ? 1 : -1) : g.side;
+      return { ...g, s: base + (g.offset || 0), side };
+    });
+
     this.stands = [];
     stands.forEach((st, k) => {
       const geo = this._makeStand(st.length, st.rows, st.roof);
@@ -494,7 +496,7 @@ export class Environment {
     // sponsor footbridge across the back straight
     const T = this.track;
     const B = this.barriers;
-    const c3 = T.corners.find((c) => c.turn === 3), c4 = T.corners.find((c) => c.turn === 4);
+    const [c3, c4] = T.def.bridge.map((n) => T.corner(n));
     const s = (c3.end + c4.start) / 2;
     const i = Math.round(s / T.ds) % T.count;
     const p = new THREE.Vector3(), tt = new THREE.Vector3(), rr = new THREE.Vector3();
@@ -558,8 +560,11 @@ export class Environment {
       return m;
     });
     const spots = [];
-    for (let k = 0; k < 9; k++) spots.push(this.straightPoint(-140 + k * 35, -(this.barriers.offL[0] + 5)));
-    for (let k = 0; k < 6; k++) spots.push(this.straightPoint(-200 + k * 80, 46));
+    const ps = this.pitSide;
+    const opp = ps > 0 ? this.barriers.offL[0] : this.barriers.offR[0];
+    for (let k = 0; k < 9; k++) spots.push(this.straightPoint(-140 + k * 35, -ps * (opp + 5)));
+    const P = this.track.def.pit;
+    for (let k = 0; k < 6; k++) spots.push(this.straightPoint(P.from + 80 + k * ((P.to - P.from - 160) / 5), ps * (this.track.halfWidth + P.wall + 35)));
     spots.forEach((pt, k) => {
       const y = this.terrain.heightAt(pt.x, pt.z);
       const pole = new THREE.Mesh(poleGeo, poleMat);
@@ -570,6 +575,184 @@ export class Environment {
       flag.rotation.y = Math.atan2(this.t0.x, this.t0.z) + Math.PI / 2 + 0.6;
       this.group.add(flag);
     });
+  }
+
+  // ---------------------------------------------------------------- theme: Monaco
+  /** Mediterranean sea & harbour, moored yachts and a dense hillside of apartment blocks. */
+  _buildCoast() {
+    const T = this.track;
+    const ter = this.terrain;
+    const B = this.barriers;
+    const r = rng(77);
+    // water
+    const water = new THREE.Mesh(
+      new THREE.PlaneGeometry(ter.size * 1.6, ter.size * 1.6, 1, 1).rotateX(-Math.PI / 2),
+      new THREE.MeshStandardMaterial({ color: 0x1b5f7e, roughness: 0.12, metalness: 0.15, transparent: true, opacity: 0.94 }),
+    );
+    water.position.set(ter.cx, ter.waterLevel, ter.cz);
+    water.receiveShadow = true;
+    this.water = water;
+    this._onTop(water);
+
+    // yachts: hull (extruded, pointed bow) + superstructure
+    const hullShape = new THREE.Shape();
+    hullShape.moveTo(-2, 0); hullShape.lineTo(2, 0); hullShape.lineTo(2.2, 9); hullShape.quadraticCurveTo(0, 15, -2.2, 9); hullShape.closePath();
+    const hull = new THREE.ExtrudeGeometry(hullShape, { depth: 2.2, bevelEnabled: false });
+    hull.rotateX(-Math.PI / 2);
+    hull.translate(0, -0.8, -7);
+    const cabin = new THREE.BoxGeometry(3, 1.8, 6).translate(0, 2.3, -1);
+    const cabin2 = new THREE.BoxGeometry(2.4, 1.2, 3.5).translate(0, 3.7, -1.5);
+    const hullMat = new THREE.MeshStandardMaterial({ color: 0xf6f6f4, roughness: 0.3, metalness: 0.1 });
+    const cabMat = new THREE.MeshStandardMaterial({ color: 0x1d2a3a, roughness: 0.15, metalness: 0.5 });
+    const spots = [];
+    for (let k = 0; k < 6000 && spots.length < 70; k++) {
+      const x = ter.cx + (r() * 2 - 1) * ter.size * 0.4, z = ter.cz + (r() * 2 - 1) * ter.size * 0.4;
+      if (ter.heightAt(x, z) > ter.waterLevel - 1.5) continue;
+      const j = T.nearestIndex(x, z, 300);
+      if (j < 0) continue; // keep boats where they are visible from the track
+      const d = Math.hypot(x - T.pos[j * 3], z - T.pos[j * 3 + 2]);
+      if (d < Math.max(B.offL[j], B.offR[j]) + 14) continue;
+      if (spots.some((p) => Math.hypot(p[0] - x, p[1] - z) < 16)) continue;
+      // moored stern-to: align with the nearby quay
+      spots.push([x, z, Math.atan2(T.right[j * 3], T.right[j * 3 + 2]) + (r() - 0.5) * 0.3, 0.8 + r() * 1.1]);
+    }
+    const hulls = new THREE.InstancedMesh(hull, hullMat, spots.length);
+    const cabs = new THREE.InstancedMesh(mergeGeometries([cabin, cabin2]), cabMat, spots.length);
+    spots.forEach(([x, z, yaw, sc], k) => {
+      _q.setFromAxisAngle(Y, yaw);
+      _m.compose(_v.set(x, ter.waterLevel, z), _q, _s.set(sc, sc, sc));
+      hulls.setMatrixAt(k, _m);
+      cabs.setMatrixAt(k, _m);
+    });
+    hulls.castShadow = cabs.castShadow = true;
+    this.group.add(hulls, cabs);
+
+    // apartment blocks: instanced boxes with a procedural window pattern (no stretched textures)
+    const box = new THREE.BoxGeometry(1, 1, 1).translate(0, 0.5, 0);
+    const mat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.75 });
+    mat.onBeforeCompile = (shader) => {
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nvarying vec3 vWN;')
+        .replace('#include <begin_vertex>', `#include <begin_vertex>
+          vec4 wp4 = modelMatrix * instanceMatrix * vec4(transformed, 1.0);
+          vWP = wp4.xyz;
+          vWN = normalize(mat3(modelMatrix * instanceMatrix) * objectNormal);`);
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vWP;\nvarying vec3 vWN;')
+        .replace('#include <color_fragment>', `#include <color_fragment>
+          if (abs(vWN.y) < 0.5) {
+            float u = abs(vWN.x) > 0.5 ? vWP.z : vWP.x;
+            float win = step(0.32, fract(u / 3.1)) * step(0.28, fract(vWP.y / 3.2)) * step(1.5, fract(vWP.y / 3.2) * 3.2 + 1.0);
+            float floorLine = step(0.92, fract(vWP.y / 3.2));
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.10, 0.14, 0.19), win * 0.85);
+            diffuseColor.rgb *= 1.0 - floorLine * 0.12;
+          } else {
+            diffuseColor.rgb *= vec3(0.72, 0.62, 0.55);
+          }`);
+    };
+    const palette = [0xf2e6cf, 0xe9c9a5, 0xf0d9a0, 0xf7f2ea, 0xe3b9a0, 0xd9d2c5, 0xf3dfc0];
+    const blocks = [];
+    for (let k = 0; k < 20000 && blocks.length < 900; k++) {
+      const x = ter.cx + (r() * 2 - 1) * ter.size * 0.36, z = ter.cz + (r() * 2 - 1) * ter.size * 0.36;
+      const gy = ter.heightAt(x, z);
+      if (gy < ter.waterLevel + 1.2) continue;
+      const j = T.nearestIndex(x, z, 700);
+      if (j < 0) continue;
+      const d = Math.hypot(x - T.pos[j * 3], z - T.pos[j * 3 + 2]);
+      const w = 12 + r() * 16, dpt = 12 + r() * 14;
+      if (d < Math.max(B.offL[j], B.offR[j]) + Math.max(w, dpt) * 0.75 + 3) continue;
+      if (this._blocked(x, z)) continue;
+      // the slope below must not be steep (keep blocks out of the quay drop)
+      if (Math.abs(ter.heightAt(x + 8, z) - ter.heightAt(x - 8, z)) > 6 || Math.abs(ter.heightAt(x, z + 8) - ter.heightAt(x, z - 8)) > 6) continue;
+      if (blocks.some((b) => Math.hypot(b[0] - x, b[1] - z) < Math.max(w, dpt) * 0.8)) continue;
+      const h = 9 + r() * 18 + Math.min(30, d * 0.05) * r();
+      blocks.push([x, gy - 2, z, w, h, dpt, Math.atan2(T.tan[j * 3], T.tan[j * 3 + 2])]);
+    }
+    const im = new THREE.InstancedMesh(box, mat, blocks.length);
+    const col = new THREE.Color();
+    blocks.forEach(([x, y, z, w, h, dpt, yaw], k) => {
+      _q.setFromAxisAngle(Y, yaw);
+      _m.compose(_v.set(x, y, z), _q, _s.set(w, h + 2, dpt));
+      im.setMatrixAt(k, _m);
+      im.setColorAt(k, col.setHex(palette[k % palette.length]));
+      this.exclusions.push({ x, z, r: Math.max(w, dpt) * 0.6 });
+    });
+    im.castShadow = true;
+    im.receiveShadow = true;
+    this.group.add(im);
+    this.buildingCount = blocks.length;
+  }
+
+  _blocked(x, z) {
+    for (const e of this.exclusions) {
+      if (e.line) {
+        const ax = e.a.x, az = e.a.z, bx = e.b.x, bz = e.b.z;
+        const dx = bx - ax, dz = bz - az;
+        const t = Math.max(0, Math.min(1, ((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz)));
+        if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) < e.w) return true;
+      } else if ((x - e.x) ** 2 + (z - e.z) ** 2 < e.r * e.r) return true;
+    }
+    return false;
+  }
+
+  // ---------------------------------------------------------------- theme: Suzuka
+  /** The amusement-park Ferris wheel that overlooks Suzuka. */
+  _buildFerrisWheel() {
+    const T = this.track;
+    const B = this.barriers;
+    const ter = this.terrain;
+    // find open ground ~ 170 m beside the main straight, away from the pits
+    let pos = null;
+    for (const along of [-150, 50, 250, -350]) {
+      const p = this.straightPoint(along, -this.pitSide * 170);
+      const j = T.nearestIndex(p.x, p.z, 400);
+      const d = j >= 0 ? Math.hypot(p.x - T.pos[j * 3], p.z - T.pos[j * 3 + 2]) : 999;
+      if (d > Math.max(B.offL[j], B.offR[j]) + 45 && !this._blocked(p.x, p.z)) { pos = p; break; }
+    }
+    if (!pos) return;
+    pos.y = ter.heightAt(pos.x, pos.z);
+    const R = 28;
+    const g = new THREE.Group();
+    g.position.copy(pos);
+    g.rotation.y = Math.atan2(this.t0.x, this.t0.z);
+    const steel = new THREE.MeshStandardMaterial({ color: 0xeeeeee, metalness: 0.6, roughness: 0.35 });
+    const wheel = new THREE.Group();
+    wheel.position.y = R + 6;
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(R, 0.45, 6, 64), steel);
+    const rim2 = rim.clone();
+    rim.position.z = 1.4;
+    rim2.position.z = -1.4;
+    wheel.add(rim, rim2);
+    const spokes = [];
+    for (let k = 0; k < 16; k++) {
+      const a = (k / 16) * Math.PI * 2;
+      const sp = new THREE.CylinderGeometry(0.12, 0.12, R, 4).translate(0, R / 2, 0);
+      sp.rotateZ(a);
+      spokes.push(sp);
+    }
+    wheel.add(new THREE.Mesh(mergeGeometries(spokes), steel));
+    const colors = [0xe10600, 0xffd21f, 0x2a64b8, 0x1f8c4a, 0xff7a00, 0xd94a9a];
+    const gondolas = new THREE.InstancedMesh(new THREE.BoxGeometry(2.2, 2.4, 2.2), new THREE.MeshStandardMaterial({ roughness: 0.4 }), 32);
+    const col = new THREE.Color();
+    for (let k = 0; k < 32; k++) {
+      const a = (k / 32) * Math.PI * 2;
+      _m.makeTranslation(Math.cos(a) * R, Math.sin(a) * R - 1.6, 0);
+      gondolas.setMatrixAt(k, _m);
+      gondolas.setColorAt(k, col.setHex(colors[k % colors.length]));
+    }
+    wheel.add(gondolas);
+    g.add(wheel);
+    // A-frame supports
+    for (const sz of [-3, 3]) for (const sx of [-1, 1]) {
+      const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, R + 9, 6), steel);
+      leg.position.set(sx * 7, (R + 6) / 2, sz);
+      leg.rotation.z = -sx * 0.24;
+      g.add(leg);
+    }
+    g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+    this.group.add(g);
+    this.ferris = { wheel, gondolas, R };
+    this.exclusions.push({ x: pos.x, z: pos.z, r: 45 });
   }
 
   // ---------------------------------------------------------------- trees
@@ -607,7 +790,9 @@ export class Environment {
     const B = this.barriers;
     const ter = this.terrain;
     const { conifer, decid } = this._treeGeometries();
-    const target = Math.round(8500 * this.quality.trees);
+    const target = Math.round((T.def.trees || 8500) * this.quality.trees);
+    const coniferShare = { valley: 0.45, forest: 0.72, japan: 0.35, monaco: 0.55 }[this.theme] ?? 0.45;
+    const water = ter.waterLevel;
     const r = rng(1234);
     const pts = [];
     const half = ter.size / 2 - 40;
@@ -621,6 +806,7 @@ export class Environment {
           if (Math.hypot(x - (ax + dx * t), z - (az + dz * t)) < e.w) return true;
         } else if ((x - e.x) ** 2 + (z - e.z) ** 2 < e.r * e.r) return true;
       }
+      if (water !== null && ter.heightAt(x, z) < water + 0.8) return true;
       const j = T.nearestIndex(x, z, 120);
       if (j >= 0) {
         const d = Math.hypot(x - T.pos[j * 3], z - T.pos[j * 3 + 2]);
@@ -628,7 +814,7 @@ export class Environment {
         if (d < lim) return true;
         // pit/paddock zone and main grandstand: keep open
         const s = j * T.ds;
-        if ((s < 330 || s > T.length - 460) && d < 95) return true;
+        if (T.onPitStraight(s) && d < 95) return true;
       }
       return false;
     };
@@ -647,7 +833,7 @@ export class Environment {
       }
       const radius = 25 + r() * 90;
       const n = 10 + Math.floor(r() * 50);
-      const type = r() < 0.45 ? 0 : 1;
+      const type = r() < coniferShare ? 0 : 1;
       for (let k = 0; k < n && pts.length < target; k++) {
         const a = r() * Math.PI * 2, rr = Math.sqrt(r()) * radius;
         const x = cx + Math.cos(a) * rr, z = cz + Math.sin(a) * rr;
@@ -688,7 +874,8 @@ export class Environment {
       const im = meshes[type];
       im.setMatrixAt(idx[type], _m);
       const h = hash2(z, x);
-      im.setColorAt(idx[type], col.setRGB(0.82 + h * 0.3, 0.85 + h * 0.25, 0.75 + h * 0.2));
+      col.setRGB(0.82 + h * 0.3, 0.85 + h * 0.25, 0.75 + h * 0.2);
+      im.setColorAt(idx[type], col);
       idx[type]++;
     }
     this.treeMeshes = meshes;
@@ -714,6 +901,18 @@ export class Environment {
 
   update(dt, time) {
     this.uniforms.uTime.value = time;
+    if (this.ferris) {
+      const f = this.ferris;
+      f.wheel.rotation.z = time * 0.035;
+      // gondolas hang level: counter-rotate their positions
+      for (let k = 0; k < 32; k++) {
+        const a = (k / 32) * Math.PI * 2;
+        _m.makeRotationZ(-f.wheel.rotation.z);
+        _m.setPosition(Math.cos(a) * f.R, Math.sin(a) * f.R - 1.6, 0);
+        f.gondolas.setMatrixAt(k, _m);
+      }
+      f.gondolas.instanceMatrix.needsUpdate = true;
+    }
   }
 
   setExcitement(v) {

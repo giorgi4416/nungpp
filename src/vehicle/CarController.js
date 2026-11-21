@@ -40,8 +40,13 @@ export class CarController {
     }
     const target = this.input.steer;
     // keyboard steering smoothing: quick to centre, progressive to lock
-    const rate = target === 0 || Math.sign(target) !== Math.sign(this.steer) ? 7 : 4.2;
-    this.steer += THREE.MathUtils.clamp(target - this.steer, -rate * dt, rate * dt);
+    if (this.input.analogSteer) {
+      // gamepad stick: follow the stick closely (light filtering only)
+      this.steer += (target - this.steer) * Math.min(1, dt * 14);
+    } else {
+      const rate = target === 0 || Math.sign(target) !== Math.sign(this.steer) ? 7 : 4.2;
+      this.steer += THREE.MathUtils.clamp(target - this.steer, -rate * dt, rate * dt);
+    }
     const thr = this.input.throttle;
     this.throttle += THREE.MathUtils.clamp(thr - this.throttle, -10 * dt, 6 * dt);
     p.steer = this.steer;

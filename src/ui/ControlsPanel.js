@@ -1,27 +1,22 @@
 import { el, button, setVisible } from './dom.js';
+import { keyLabel } from '../systems/InputManager.js';
 
-/** Visual keyboard controls guide. */
+/** Visual controls guide; shows the player's current key bindings. */
 export class ControlsPanel {
-  constructor(root, audio) {
+  constructor(root, audio, input) {
+    this.input = input;
     const o = (this.node = el('section', 'screen overlay top'));
     o.innerHTML = `
       <div class="panel" role="dialog" aria-label="Controls">
         <h2><small>HOW TO DRIVE</small>Controls</h2>
-        <div class="controls-grid">
-          <div class="ctrl"><div class="keys"><kbd>W</kbd><kbd>↑</kbd></div><span><b>Accelerate</b>Throttle</span></div>
-          <div class="ctrl"><div class="keys"><kbd>S</kbd><kbd>↓</kbd></div><span><b>Brake</b>Hold at a stop to reverse</span></div>
-          <div class="ctrl"><div class="keys"><kbd>A</kbd><kbd>←</kbd></div><span><b>Steer left</b></span></div>
-          <div class="ctrl"><div class="keys"><kbd>D</kbd><kbd>→</kbd></div><span><b>Steer right</b></span></div>
-          <div class="ctrl"><div class="keys"><kbd class="wide">SPACE</kbd></div><span><b>Strong brake</b>Maximum stopping power</span></div>
-          <div class="ctrl"><div class="keys"><kbd>C</kbd></div><span><b>Camera</b>Chase · Far · Cockpit</span></div>
-          <div class="ctrl"><div class="keys"><kbd>R</kbd></div><span><b>Reset car</b>Back onto the track</span></div>
-          <div class="ctrl"><div class="keys"><kbd>ESC</kbd></div><span><b>Pause</b>Menu, restart, quit</span></div>
-          <div class="ctrl"><div class="keys"><kbd>M</kbd></div><span><b>Mute</b>Toggle all sound</span></div>
-        </div>
+        <div class="controls-grid" data-grid></div>
         <p class="controls-tip">
           Steering is speed sensitive: the car turns sharply in slow corners and stays stable at 300 km/h.
-          Brake in a straight line before the turn — watch the blue 150 / 100 / 50 m boards — and get back on the throttle at the exit.
-          Kerbs are fine, but grass and gravel cost grip and speed. Turn 1 at the end of the main straight is the best overtaking spot.
+          Brake in a straight line before the turn — watch the blue 150 / 100 / 50 m boards. Hit a barrier hard and the car
+          really breaks: wings, nose, suspension and wheels can come off. Press R to respawn a repaired car.
+          Drag the mouse on the 3D view to look around the car (or around the cockpit), scroll to zoom, V or double-click to reset.
+          In Manual transmission shift up near the blue shift lights and don't over-rev on downshifts.
+          Remap any key in Settings → Controls. Gamepads are supported (right stick looks around).
         </p>
         <div class="actions"><button class="btn primary" data-act="close">Got it</button></div>
       </div>`;
@@ -30,8 +25,21 @@ export class ControlsPanel {
     o.addEventListener('click', (e) => { if (e.target === o) this.hide(); });
   }
 
+  _render() {
+    const b = this.input.bindings;
+    const keys = (a) => (b[a] || []).filter(Boolean).map((c) => `<kbd class="${keyLabel(c).length > 3 ? 'wide' : ''}">${keyLabel(c)}</kbd>`).join('');
+    const rows = [
+      ['accelerate', 'Accelerate', 'Throttle'], ['brake', 'Brake', 'Hold at a stop to reverse'], ['left', 'Steer left', ''], ['right', 'Steer right', ''],
+      ['strongBrake', 'Strong brake', 'Maximum stopping power'], ['shiftUp', 'Shift up', 'Manual transmission'], ['shiftDown', 'Shift down', 'Manual transmission'],
+      ['camera', 'Camera', 'Chase · Far · Cockpit'], ['cameraReset', 'Reset view', 'Or double-click the 3D view'],
+      ['lookLeft', 'Look left', 'Hold (cockpit)'], ['lookRight', 'Look right', 'Hold (cockpit)'], ['reset', 'Reset car', 'Back onto the track'], ['pause', 'Pause', 'Menu, restart, quit'], ['mute', 'Mute', 'Toggle all sound'],
+    ];
+    this.node.querySelector('[data-grid]').innerHTML = rows.map(([a, t, d]) => `<div class="ctrl"><div class="keys">${keys(a)}</div><span><b>${t}</b>${d}</span></div>`).join('');
+  }
+
   show(onClose) {
     this._onClose = onClose;
+    this._render();
     setVisible(this.node, true);
     this.visible = true;
   }

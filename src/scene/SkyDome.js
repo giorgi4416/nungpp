@@ -47,10 +47,10 @@ export function createSkyDome(sunDir, { radius = 4500, zenith = 0x2f6fc4, horizo
 }
 
 /** Build a PMREM environment from the same sky plus a dark ground hemisphere. */
-export function createEnvironmentMap(renderer, sunDir) {
+export function createEnvironmentMap(renderer, sunDir, colors = {}) {
   const pmrem = new THREE.PMREMGenerator(renderer);
   const envScene = new THREE.Scene();
-  const sky = createSkyDome(sunDir, { radius: 100 });
+  const sky = createSkyDome(sunDir, { radius: 100, zenith: colors.zenith ?? 0x2f6fc4, horizon: colors.horizon ?? 0xd6e6f3, ground: colors.fog ?? 0xb9cde0 });
   sky.material.toneMapped = false;
   envScene.add(sky);
   const groundMat = new THREE.MeshBasicMaterial({ color: 0x55663a, side: THREE.BackSide });

@@ -37,6 +37,8 @@ export class CarAudio {
       { type: 'square', mul: 2, gain: 0.18 },
       { type: 'sawtooth', mul: 0.5, gain: 0.4 },
       { type: 'triangle', mul: 3.01, gain: 0.12 },
+      { type: 'sawtooth', mul: 1.5, gain: 0.14 }, // V6 half-order harmonic gives the rasp
+      { type: 'sine', mul: 0.25, gain: 0.22 }, // low body
     ];
     for (const d of defs) {
       const o = c.createOscillator();
@@ -126,6 +128,8 @@ export class CarAudio {
     this.aiFilter.connect(this.aiGain).connect(a.engineBus);
     this.aiOsc.start();
     this.aiOsc2.start();
+    this.prevThrottle = 0;
+    this.popCooldown = 0;
     this.ready = true;
   }
 
@@ -152,29 +156,41 @@ export class CarAudio {
     const t = c.currentTime;
     const k = 0.03;
     const rpm = s.rpm;
-    // V6, 3 firing pulses per revolution
-    const f = (rpm / 60) * 3 * 0.5;
+    const maxRpm = s.maxRpm || 12500;
+    const rn = rpm / maxRpm;
+    // firing frequency: cylinders/2 pulses per revolution (V6 hybrid, V8, V10, V12 sound different)
+    const f = (rpm / 60) * ((s.cylinders || 6) / 2) * 0.5;
     for (const { o, mul } of this.oscs) o.frequency.setTargetAtTime(f * mul, t, k);
     const thr = s.throttle;
-    const cutoff = 500 + (rpm / 12500) * 3200 * (0.45 + thr * 0.55);
+    // rev limiter stutter (manual gearbox): chop the engine note rapidly
+    const lim = s.limiter ? 0.55 + 0.45 * Math.sign(Math.sin(t * 70)) : 1;
+    // lift-off crackles: a few pops from the exhaust when the throttle closes at high revs
+    this.popCooldown -= 1 / 60;
+    if (this.prevThrottle > 0.6 && thr < 0.2 && rpm > 8500 && this.popCooldown <= 0) {
+      this.popCooldown = 0.6;
+      for (let k = 0; k < 3; k++) this.audio.noiseBurst(0.035, { gain: 0.16, freq: 600 + Math.random() * 500, q: 1.2, when: k * (0.06 + Math.random() * 0.07) });
+    }
+    this.prevThrottle = thr;
+    const cutoff = 500 + rn * 3200 * (0.45 + thr * 0.55);
     this.engineFilter.frequency.setTargetAtTime(cutoff, t, 0.05);
-    this.engineGain.gain.setTargetAtTime(0.13 + thr * 0.17 + (rpm / 12500) * 0.08, t, 0.05);
-    this.turbo.frequency.setTargetAtTime(2400 + (rpm / 12500) * 4200, t, 0.1);
-    this.turboGain.gain.setTargetAtTime(thr * (rpm / 12500) * 0.012, t, 0.15);
+    this.engineGain.gain.setTargetAtTime((0.13 + thr * 0.17 + rn * 0.08) * lim, t, 0.02);
+    this.turbo.frequency.setTargetAtTime(2400 + rn * 4200, t, 0.1);
+    this.turboGain.gain.setTargetAtTime(thr * rn * 0.012, t, 0.15);
 
     const spd = Math.abs(s.speed);
     this.squealGain.gain.setTargetAtTime(Math.min(0.22, s.slip * 0.24) * Math.min(1, spd / 8), t, 0.05);
     this.squealFilter.frequency.setTargetAtTime(1300 + s.slip * 500, t, 0.1);
     this.windGain.gain.setTargetAtTime(Math.min(0.16, (spd / 90) ** 2 * 0.16), t, 0.1);
     this.windFilter.frequency.setTargetAtTime(300 + spd * 14, t, 0.1);
-    this.rumbleGain.gain.setTargetAtTime(s.offTrack > 0 ? Math.min(0.5, spd / 30) * s.offTrack : 0, t, 0.05);
+    const kerb = (s.kerb || 0) * Math.min(1, spd / 20) * 0.45;
+    this.rumbleGain.gain.setTargetAtTime(Math.max(s.offTrack > 0 ? Math.min(0.5, spd / 30) * s.offTrack : 0, kerb), t, 0.03);
 
     if (s.ai) {
       const d = s.ai.distance;
       const vol = d < 160 ? Math.min(0.12, 9 / (d + 12)) : 0;
       // doppler-ish pitch shift from closing speed
       const dop = 1 + Math.max(-0.25, Math.min(0.25, s.ai.closingSpeed / 340));
-      const af = (s.ai.rpm / 60) * 1.5 * dop;
+      const af = (s.ai.rpm / 60) * ((s.cylinders || 6) / 2) * 0.5 * dop;
       this.aiOsc.frequency.setTargetAtTime(af, t, 0.05);
       this.aiOsc2.frequency.setTargetAtTime(af * 2, t, 0.05);
       this.aiGain.gain.setTargetAtTime(vol, t, 0.08);

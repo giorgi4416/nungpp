@@ -6,8 +6,11 @@ import { smokeSprite } from '../scene/Textures.js';
  * Fixed-size typed arrays: zero allocations per frame.
  */
 export class Particles {
-  constructor(scene, max = 600) {
+  constructor(scene, max = 600, { additive = false, gravity = -0.6, drag = 1.8, grow = 2.4 } = {}) {
     this.max = max;
+    this.gravity = gravity;
+    this.dragK = drag;
+    this.grow = grow;
     this.pos = new Float32Array(max * 3);
     this.vel = new Float32Array(max * 3);
     this.age = new Float32Array(max);
@@ -56,6 +59,7 @@ export class Particles {
         }`,
       transparent: true,
       depthWrite: false,
+      blending: additive ? THREE.AdditiveBlending : THREE.NormalBlending,
     });
     this.points = new THREE.Points(g, this.material);
     this.points.frustumCulled = false;
@@ -94,14 +98,14 @@ export class Particles {
       this.age[i] += dt;
       const t = this.age[i] / this.life[i];
       if (t >= 1) { this.life[i] = 0; sz[i] = 0; this.alpha[i] = 0; continue; }
-      const drag = 1 - Math.min(1, dt * 1.8);
+      const drag = 1 - Math.min(1, dt * this.dragK);
       this.vel[i * 3] *= drag;
       this.vel[i * 3 + 2] *= drag;
-      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * drag + dt * 0.6;
+      this.vel[i * 3 + 1] = this.vel[i * 3 + 1] * drag - dt * this.gravity;
       this.pos[i * 3] += this.vel[i * 3] * dt;
       this.pos[i * 3 + 1] += this.vel[i * 3 + 1] * dt;
       this.pos[i * 3 + 2] += this.vel[i * 3 + 2] * dt;
-      sz[i] = this.size[i] * (0.6 + t * 2.4);
+      sz[i] = this.size[i] * (0.6 + t * this.grow);
       this.alpha[i] = base[i] * (1 - t) * Math.min(1, t * 8);
     }
     this.aPos.needsUpdate = true;

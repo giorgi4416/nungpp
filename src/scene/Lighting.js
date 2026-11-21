@@ -21,6 +21,13 @@ export class Lighting {
     this.applyQuality(quality);
   }
 
+  /** 0 = open sky, 1 = deep inside a tunnel. */
+  setDimming(f) {
+    if (this._baseSun === undefined) { this._baseSun = this.sun.intensity; this._baseHemi = this.hemi.intensity; }
+    this.sun.intensity = this._baseSun * (1 - 0.94 * f);
+    this.hemi.intensity = this._baseHemi * (1 - 0.8 * f);
+  }
+
   applyQuality(q) {
     const s = this.sun.shadow;
     if (s.mapSize.x !== q.shadowMap) {

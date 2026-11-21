@@ -34,13 +34,30 @@ export function createScene(canvas, qualityName) {
   const camera = new THREE.PerspectiveCamera(62, window.innerWidth / window.innerHeight, 0.1, 6000);
   camera.position.set(0, 30, 60);
 
-  // art-directed sky dome + matching environment map for reflections
-  const sky = createSkyDome(SUN_DIRECTION);
-  scene.add(sky);
-  scene.environment = createEnvironmentMap(renderer, SUN_DIRECTION);
-  scene.environmentIntensity = 0.9;
+  return { renderer, scene, camera, quality: q };
+}
 
-  return { renderer, scene, camera, sky, quality: q };
+/**
+ * Per-circuit sky: gradient dome, sun direction, fog colour and a matching
+ * environment map. Replaces the previous circuit's sky.
+ * @param sky {zenith, horizon, fog, sunElevation, sunAzimuth}
+ */
+export function setSky(renderer, scene, sky) {
+  const ud = scene.userData;
+  if (ud.sky) {
+    ud.sky.removeFromParent();
+    ud.sky.geometry.dispose();
+    ud.sky.material.dispose();
+  }
+  if (scene.environment) scene.environment.dispose();
+  SUN_DIRECTION.setFromSphericalCoords(1, THREE.MathUtils.degToRad(90 - sky.sunElevation), THREE.MathUtils.degToRad(sky.sunAzimuth));
+  const dome = createSkyDome(SUN_DIRECTION, { zenith: sky.zenith, horizon: sky.horizon, ground: sky.fog });
+  scene.add(dome);
+  ud.sky = dome;
+  scene.environment = createEnvironmentMap(renderer, SUN_DIRECTION, sky);
+  scene.environmentIntensity = 0.9;
+  scene.fog.color.setHex(sky.fog);
+  scene.background = scene.fog.color;
 }
 
 export function applyQuality(renderer, scene, qualityName) {

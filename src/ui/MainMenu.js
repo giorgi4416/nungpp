@@ -1,6 +1,9 @@
 import { el, button, setVisible } from './dom.js';
 import { formatTime } from '../race/LapSystem.js';
 import { Storage } from '../systems/LocalStorage.js';
+import { hex } from '../vehicle/Teams.js';
+import { CAR_BY_ID, SUBERA_BY_ID, defaultCarId } from '../vehicle/CarCatalog.js';
+import { CIRCUITS } from '../track/circuits/index.js';
 
 /**
  * Cinematic main menu overlay. The 3D scene behind it (showcase car, live
@@ -14,15 +17,17 @@ export class MainMenu {
     const m = (this.node = el('section', 'screen menu'));
     m.innerHTML = `
       <div class="menu-left">
-        <div class="menu-kicker">GRAND PRIX WEEKEND · MOGYORÓD, HUNGARY</div>
+        <div class="menu-kicker" data-kicker>GRAND PRIX WEEKEND</div>
         <h1 class="menu-title">Hungaroring<br><span class="gp">GP</span></h1>
         <div class="menu-sub-title">RACING CHALLENGE</div>
         <p class="menu-tagline">“Master the circuit. Own the race.”</p>
         <div class="menu-buttons">
           <button class="menu-btn primary" data-act="race">Start Race <span class="hint" data-laps-hint></span></button>
           <button class="menu-btn" data-act="trial">Time Trial <span class="hint">SOLO · HOTLAP</span></button>
-          <button class="menu-btn" data-act="settings">Settings <span class="hint">GRAPHICS · AUDIO</span></button>
-          <button class="menu-btn" data-act="controls">Controls <span class="hint">KEYBOARD</span></button>
+          <button class="menu-btn" data-act="track">Circuit <span class="hint" data-track-hint></span></button>
+          <button class="menu-btn" data-act="team">Car <span class="hint" data-team-hint></span></button>
+          <button class="menu-btn" data-act="settings">Settings <span class="hint">GAMEPLAY · CONTROLS</span></button>
+          <button class="menu-btn" data-act="controls">Controls <span class="hint">KEYS · GAMEPAD</span></button>
         </div>
         <div class="race-options">
           <div class="seg" data-seg="laps"><span class="seg-label">LAPS</span><button data-v="3">3</button><button data-v="5">5</button></div>
@@ -31,13 +36,13 @@ export class MainMenu {
       </div>
       <div class="menu-right">
         <div class="info-card">
-          <div class="car-tag"><div class="car-num">#7</div><div><h4 style="margin:0">YOUR CAR</h4><div style="font-weight:800;letter-spacing:.06em">DANUBIO RACING · DR-26</div></div></div>
-          <div class="row" style="margin-top:10px"><span>Circuit</span><b>4.381 km · 14 turns</b></div>
+          <div class="car-tag"><div class="car-num" data-num>#7</div><div><h4 style="margin:0">YOUR CAR</h4><div style="font-weight:800;letter-spacing:.06em" data-team>—</div><div style="font-size:12px;opacity:.7;letter-spacing:.04em" data-era>—</div></div></div>
+          <div class="row" style="margin-top:10px"><span>Circuit</span><b data-circuit>—</b></div>
           <div class="row"><span>Personal best</span><b data-best>-:--.---</b></div>
           <div class="row"><span>Last race</span><b data-last>—</b></div>
         </div>
       </div>
-      <div class="menu-footer">THREE.JS · RAPIER PHYSICS · ALL ASSETS PROCEDURAL · FICTIONAL TEAMS & LIVERIES</div>
+      <div class="menu-footer">THREE.JS · RAPIER PHYSICS · ALL ASSETS PROCEDURAL · FICTIONAL DRIVERS · NO OFFICIAL LOGOS</div>
     `;
     root.appendChild(m);
     m.querySelectorAll('.menu-btn').forEach((b) => button(b, audio, () => this._act(b.dataset.act)));
@@ -59,6 +64,8 @@ export class MainMenu {
     else if (a === 'trial') this.h.onTrial();
     else if (a === 'settings') this.h.onSettings();
     else if (a === 'controls') this.h.onControls();
+    else if (a === 'team') this.h.onTeam();
+    else if (a === 'track') this.h.onTrack();
   }
 
   refresh() {
@@ -68,7 +75,20 @@ export class MainMenu {
       seg.querySelectorAll('button').forEach((b) => b.classList.toggle('active', b.dataset.v === cur));
     });
     m.querySelector('[data-laps-hint]').textContent = `${this.settings.laps} LAPS · 4 RIVALS`;
-    const best = Storage.loadAllTimeBest();
+    const team = CAR_BY_ID[this.settings.car] || CAR_BY_ID[defaultCarId(this.settings.team)];
+    const sub = SUBERA_BY_ID[team.sub];
+    const col = (v) => (typeof v === 'number' ? hex(v) : v);
+    const c = CIRCUITS[this.settings.track];
+    m.querySelector('[data-kicker]').textContent = `${c.gp} · ${c.location}`.toUpperCase();
+    m.querySelector('[data-track-hint]').textContent = c.name.toUpperCase();
+    m.querySelector('[data-team-hint]').textContent = `${team.name} · ${team.sub === '2020' ? '2020' : sub.years}`.toUpperCase();
+    m.querySelector('[data-num]').textContent = '#' + team.number;
+    const light = /^#(f|e)[0-9a-f](f|e)/i.test(col(team.primary)) || team.primary === 0xf2f2f2;
+    m.querySelector('[data-num]').style.color = col(light ? team.accent : team.primary);
+    m.querySelector('[data-era]').textContent = `${team.sub === '2020' ? '2020 ERA' : sub.name.toUpperCase()} · ${sub.engine}`;
+    m.querySelector('[data-team]').textContent = team.name.toUpperCase();
+    m.querySelector('[data-circuit]').textContent = `${c.name} · ${(c.length / 1000).toFixed(3)} km`;
+    const best = Storage.loadAllTimeBest(this.settings.track);
     m.querySelector('[data-best]').textContent = formatTime(best);
     const last = Storage.loadLastResult();
     m.querySelector('[data-last]').textContent = last ? `P${last.position}/${last.total} · ${formatTime(last.time)}` : '—';
