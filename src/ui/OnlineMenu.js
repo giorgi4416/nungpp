@@ -10,9 +10,10 @@ const ROOM_KEY = 'hgp-online-room';
 const SUBS = ERAS.flatMap((e) => e.subs.map((s) => ({ ...s, eraName: e.name })));
 const subLabel = (id) => { const s = SUBERA_BY_ID[id]; return s ? (s.id === '2020' ? '2020' : s.name) : id; };
 const trackName = (id) => (CIRCUITS[id] ? CIRCUITS[id].name : id);
+// the display name is remembered per browser; the current room per TAB (like the online identity)
 const store = {
-  get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
-  set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch { /* private mode */ } },
+  get: (k) => { try { return (k === ROOM_KEY ? sessionStorage : localStorage).getItem(k); } catch { return null; } },
+  set: (k, v) => { try { const s = k === ROOM_KEY ? sessionStorage : localStorage; v == null ? s.removeItem(k) : s.setItem(k, v); } catch { /* private mode */ } },
 };
 const col = (v) => (typeof v === 'number' ? hex(v) : v);
 

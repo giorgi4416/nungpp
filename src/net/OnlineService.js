@@ -13,6 +13,18 @@ const KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
 export const onlineConfigured = () => !!(URL && KEY);
 
+function tabStorage() {
+  const mem = new Map();
+  try {
+    const t = window.sessionStorage;
+    t.setItem('hgp-probe', '1');
+    t.removeItem('hgp-probe');
+    return t;
+  } catch {
+    return { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v), removeItem: (k) => mem.delete(k) };
+  }
+}
+
 export class OnlineService {
   constructor() {
     this.sb = null;
@@ -31,7 +43,9 @@ export class OnlineService {
     if (!onlineConfigured()) throw new Error('Online racing is not configured on this build (missing Supabase settings).');
     if (!this.sb) {
       this.sb = createClient(URL, KEY, {
-        auth: { persistSession: true, autoRefreshToken: true, storageKey: 'hgp-online-auth' },
+        // per TAB identity (sessionStorage): two tabs / windows = two different players, while a
+        // reload of the same tab keeps its seat in the room
+        auth: { persistSession: true, autoRefreshToken: true, storageKey: 'hgp-online-auth', storage: tabStorage() },
         realtime: { params: { eventsPerSecond: 30 }, heartbeatIntervalMs: 15000 },
       });
     }
