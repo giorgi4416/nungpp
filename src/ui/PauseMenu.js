@@ -23,8 +23,11 @@ export class PauseMenu {
   }
 
   show(mode) {
-    this.sub.textContent = mode === 'race' ? 'GRAND PRIX' : 'TIME TRIAL';
+    const online = mode === 'online';
+    this.sub.textContent = online ? 'ONLINE RACE · THE RACE CONTINUES' : mode === 'race' ? 'GRAND PRIX' : 'TIME TRIAL';
     this.restartHint.textContent = mode === 'race' ? 'FROM THE GRID' : 'NEW SESSION';
+    this.node.querySelector('[data-act=restart]').style.display = online ? 'none' : '';
+    this.node.querySelector('[data-act=menu]').firstChild.textContent = online ? 'Back to Lobby ' : 'Main Menu';
     setVisible(this.node, true);
     this.visible = true;
     setTimeout(() => this.node.querySelector('.menu-btn.primary')?.focus({ preventScroll: true }), 30);

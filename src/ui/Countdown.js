@@ -23,8 +23,12 @@ export class Countdown {
   /**
    * @param opts {preDelay, interval, onLights(nRed, green), onGo, caption}
    */
-  start({ preDelay = 2.4, interval = 1.0, holdMin = 0.6, holdMax = 2.2, onLights, onGo, caption = '' } = {}) {
+  start({ preDelay = 2.4, interval = 1.0, holdMin = 0.6, holdMax = 2.2, onLights, onGo, caption = '', clock = null } = {}) {
     this.t = 0;
+    // online: follow a shared wall clock (seconds) instead of accumulated frame time, so every
+    // player's lights go out at the same instant whatever their frame rate
+    this.clock = clock;
+    this.t0 = clock ? clock() : 0;
     this.preDelay = preDelay;
     this.interval = interval;
     this.hold = holdMin + Math.random() * (holdMax - holdMin);
@@ -44,7 +48,7 @@ export class Countdown {
 
   update(dt) {
     if (!this.active) return;
-    this.t += dt;
+    this.t = this.clock ? this.clock() - this.t0 : this.t + dt;
     if (!this.green) {
       const n = Math.max(0, Math.min(5, Math.floor((this.t - this.preDelay) / this.interval) + 1));
       if (this.t >= this.preDelay && n > this.lit) {

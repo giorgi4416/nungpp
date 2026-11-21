@@ -34,7 +34,7 @@ export class RaceManager {
     this.racers = racers.map((r) => ({
       ...r,
       active: true,
-      tracker: new LapTracker(this.track, this.cps),
+      tracker: r.tracker || new LapTracker(this.track, this.cps), // online rivals bring a tracker fed by the network
       position: 0,
       gap: 0,
       prevPosition: 0,

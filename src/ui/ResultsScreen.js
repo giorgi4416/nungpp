@@ -41,6 +41,8 @@ export class ResultsScreen {
    */
   show(summary, rows) {
     const q = this.q;
+    q('[data-act=menu]').textContent = summary.online ? 'Leave Server' : 'Main Menu';
+    q('[data-act=restart]').textContent = summary.online ? 'Back to Lobby' : 'Race Again';
     const pos = summary.position;
     q('[data-sub]').textContent = `${(summary.track || '').toUpperCase()} · FINAL CLASSIFICATION`;
     q('[data-title]').textContent = pos === 1 ? 'Victory!' : pos <= 3 ? 'Podium Finish' : 'Race Complete';

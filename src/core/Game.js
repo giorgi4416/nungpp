@@ -34,6 +34,8 @@ import { MainMenu } from '../ui/MainMenu.js';
 import { SettingsMenu } from '../ui/SettingsMenu.js';
 import { ControlsPanel } from '../ui/ControlsPanel.js';
 import { CarSelect, TrackSelect } from '../ui/SelectionScreens.js';
+import { OnlineMenu } from '../ui/OnlineMenu.js';
+import { RemoteCar, packState, damageMask, FLAG } from '../net/RemoteCar.js';
 import { HUD } from '../ui/HUD.js';
 import { Countdown } from '../ui/Countdown.js';
 import { PauseMenu } from '../ui/PauseMenu.js';
@@ -172,6 +174,7 @@ export class Game {
       this.world.free();
       this.skids.clear();
       this.debris.clear();
+      this._disposeRemotes();
       this.particles.clear();
       this.sparks.clear();
     }
@@ -259,6 +262,7 @@ export class Game {
     this.menu = new MainMenu(root, this.audio, this.settings, {
       onRace: () => this.startSession('race'),
       onTrial: () => this.startSession('trial'),
+      onOnline: () => { this.menu.show(false); this.online.show(); },
       onSettings: () => this.settingsMenu.show(),
       onControls: () => this.controlsPanel.show(),
       onTeam: () => this._openCarSelect(),
@@ -270,16 +274,18 @@ export class Game {
     this.teamSelect = new CarSelect(root, this.audio, () => this.settings.car, (id) => this.selectCar(id));
     this.teamSelect.onClose = () => this.state.is(STATE.MENU) && this.menu.show(true);
     this.trackSelect = new TrackSelect(root, this.audio, () => this.settings.track, (id) => this.selectTrack(id));
+    this.online = new OnlineMenu(root, this.audio, this);
+    this.online.onClose = () => this.state.is(STATE.MENU) && !this._onlineStarting && this.menu.show(true);
     this.pauseMenu = new PauseMenu(root, this.audio, {
       resume: () => this.resume(),
-      restart: () => this.startSession(this.mode),
+      restart: () => this.mode !== 'online' && this.startSession(this.mode),
       controls: () => this.controlsPanel.show(),
       settings: () => this.settingsMenu.show(),
-      menu: () => this.toMenu(),
+      menu: () => (this.mode === 'online' ? this._endOnlineRace({ toLobby: true }) : this.toMenu()),
     });
     this.results = new ResultsScreen(root, this.audio, {
-      restart: () => this.startSession('race'),
-      menu: () => this.toMenu(),
+      restart: () => (this.mode === 'online' ? this._endOnlineRace({ toLobby: true }) : this.startSession('race')),
+      menu: () => (this.mode === 'online' ? this._endOnlineRace({ leave: true }) : this.toMenu()),
     });
     this.fade = el('div', 'fade');
     root.appendChild(this.fade);
@@ -303,7 +309,7 @@ export class Game {
     this.menu.refresh();
   }
 
-  async selectTrack(id) {
+  async selectTrack(id, { showMenu = true } = {}) {
     if (!CIRCUITS[id] || id === this.trackId || this._loadingTrack) return;
     this._loadingTrack = true;
     this.settings.track = id;
@@ -318,7 +324,7 @@ export class Game {
       try { if (this.renderer.compileAsync) await this.renderer.compileAsync(this.scene, this.camera); } catch { /* optional */ }
     } finally {
       this.loadingOverlay.classList.remove('visible');
-      this.menu.show(true);
+      if (showMenu) this.menu.show(true);
       this._loadingTrack = false;
     }
   }
@@ -405,6 +411,7 @@ export class Game {
   }
 
   _setupSession(mode) {
+    this._disposeRemotes();
     this.mode = mode;
     this.state.mode = mode;
     for (const ui of [this.results, this.pauseMenu, this.settingsMenu, this.controlsPanel, this.teamSelect, this.trackSelect]) ui.hide();
@@ -507,6 +514,7 @@ export class Game {
     this.physics.locked = false;
     this.race.start(this.raceTime);
     if (this.mode === 'race') this.ai.release();
+    if (this.mode === 'online' && this.net && this.net.isHost) this.online.svc.setStatus(this.net.room.id, 'racing').catch(() => {});
     this.environment.setExcitement(0.45);
     if (this.cams.mode === 'grid') this.cams.setMode(this.settings.camera, { duration: 0.9 });
   }
@@ -518,6 +526,7 @@ export class Game {
     this.carAudio.setActive(false);
     this.input.clear();
     this.pauseMenu.show(this.mode);
+    if (this.mode === 'online') this.hud.notify('PAUSED', 'YOUR CAR IS A GHOST UNTIL YOU RESUME', 'yellow', 3);
   }
 
   resume() {
@@ -599,6 +608,273 @@ export class Game {
     this._resetCooldown = 2;
   }
 
+  // ------------------------------------------------------------------ online racing
+  /*
+   * Authority model (honest): each player's own browser simulates their own car with the normal
+   * physics and reports its state; nobody else's physics runs here. The database fixes the start
+   * instant and room ownership; positions are ordered from each player's reported progress.
+   * Friends-and-fun netcode, not anti-cheat.
+   */
+  onlineJoined(session) {
+    this.net = session;
+  }
+
+  onlineStatus(st) {
+    if (this.mode !== 'online' || !this._inSession()) return;
+    if (st === 'reconnecting') this.hud.notify('CONNECTION LOST', 'RECONNECTING…', 'warn', 3);
+    else if (st === 'connected') this.hud.notify('RECONNECTED', '', 'green', 1.6);
+  }
+
+  onlineNotice(type, userId, s) {
+    const p = s.players.find((x) => x.user_id === userId);
+    const name = p ? p.display_name : 'A driver';
+    const rc = this.remotes && this.remotes.get(userId);
+    if (type === 'leave' && rc) rc.connected = false;
+    if (type === 'join' && rc) rc.connected = true;
+    if (!this._inSession() || this.mode !== 'online') return;
+    if (type === 'join' && rc) this.hud.notify(name.toUpperCase(), 'RECONNECTED', 'green', 2);
+    else if (type === 'leave' && rc) this.hud.notify(name.toUpperCase(), 'DISCONNECTED', 'yellow', 2.4);
+    else if (type === 'host') this.hud.notify('YOU ARE NOW THE HOST', '', 'purple', 2.6);
+  }
+
+  onlineRosterChanged(s) {
+    if (!this.remotes) return;
+    for (const p of s.players) {
+      const rc = this.remotes.get(p.user_id);
+      if (rc) rc.connected = s.online.has(p.user_id);
+    }
+    for (const [uid, rc] of this.remotes) if (!s.players.some((p) => p.user_id === uid)) rc.connected = false;
+  }
+
+  onlineState(m) {
+    const rc = this.remotes && this.remotes.get(m.u);
+    if (rc) rc.push(m, this.online.svc.serverNow());
+  }
+
+  onlineFinish(m) {
+    const rc = this.remotes && this.remotes.get(m.u);
+    if (!rc || !this.race || rc.tracker.finished) return;
+    const tr = rc.tracker;
+    tr.finished = true;
+    tr.finishTime = this.race.startTime + m.total;
+    tr.lapsCompleted = m.laps;
+    if (m.best) tr.bestLap = m.best;
+    const first = !this.race.chequered;
+    this.race.chequered = true; // the leader has taken the flag: everyone finishes at the line
+    if (this._inSession()) this.hud.notify(first ? 'CHEQUERED FLAG' : 'FINISHED', `${rc.name.toUpperCase()}${first ? ' WINS' : ''}`, 'yellow', 2.6);
+  }
+
+  /** Host pressed Start (or we rejoined a running race): load the room's circuit and line up. */
+  async onlineStart(s, { seq, at, rejoin }) {
+    if (this._onlineSeq === seq || this._onlineStarting) return;
+    this._onlineSeq = seq;
+    this._onlineStarting = true;
+    try {
+      this.online.hide();
+      for (const ui of [this.results, this.pauseMenu, this.settingsMenu, this.controlsPanel, this.teamSelect, this.trackSelect]) ui.hide();
+      if (this.state.is(STATE.PAUSED)) this.state.set(this._pausedFrom || STATE.RACING);
+      const room = s.room;
+      const me = s.players.find((p) => p.user_id === s.me);
+      if (me && CAR_BY_ID[me.selected_car] && me.selected_car !== this.settings.car) this.selectCar(me.selected_car);
+      if (this.trackId !== room.track_id) {
+        this.menu.show(false);
+        await this.selectTrack(room.track_id, { showMenu: false });
+      }
+      this._setupOnlineSession(s, at, rejoin);
+    } finally {
+      this._onlineStarting = false;
+    }
+  }
+
+  _setupOnlineSession(s, startAt, rejoin) {
+    const svc = this.online.svc;
+    this.net = s;
+    this.mode = 'online';
+    this.state.mode = 'race';
+    this.menu.show(false);
+    this.countdown.cancel();
+    this.hud.clearToasts();
+    this.input.clear();
+    this.particles.clear();
+    this.sparks.clear();
+    this.skids.clear();
+    this.debris.clear();
+    this.audio.playMusic(false);
+    this.ai.setEnabled(false);
+    const room = s.room;
+    const T = this.track;
+    const slots = this.circuit.gridSlots;
+    const me = s.players.find((p) => p.user_id === s.me) || { grid_slot: 0 };
+    const mySlot = slots[Math.min(slots.length - 1, me.grid_slot || 0)];
+    const spawn = this.trackTransform(mySlot.s, mySlot.lateral);
+    const ph = this.physics;
+    ph.body.setEnabled(true);
+    ph.reset(spawn.pos, spawn.quat);
+    ph.resetThermals(T.def.ambient);
+    this.damage.reset();
+    this.damage.enabled = true;
+    ph.locked = true;
+    ph.throttle = ph.brake = ph.steer = 0;
+    this._applyDriverSettings();
+    this.controller.reset();
+    this.controller.autopilot = false;
+    this._proj = { index: undefined };
+    T.project(spawn.pos.x, spawn.pos.z, undefined, this._proj);
+    this._sfcProj.index = this._proj.index;
+    this.playerCar.setVisible(true);
+
+    // rivals = the other players in the room, each drawing the car they picked
+    this._disposeRemotes();
+    this.remotes = new Map();
+    const short = (n) => n.replace(/[^A-Za-z0-9]/g, '').slice(0, 3).toUpperCase() || 'DRV';
+    const racers = [{
+      id: 'player', name: me.display_name || 'YOU', short: 'YOU', team: this.carDef.name, color: hex(this.team.primary), isPlayer: true,
+      getS: () => this._proj.s, getSpeed: () => this.physics.speed,
+    }];
+    for (const p of s.players) {
+      if (p.user_id === s.me) continue;
+      const rc = new RemoteCar(this.RAPIER, this.world, this.scene, p);
+      rc.connected = s.online.has(p.user_id);
+      this.remotes.set(p.user_id, rc);
+      const c = rc.def;
+      racers.push({
+        id: p.user_id, name: p.display_name, short: short(p.display_name), team: c.name, color: typeof c.primary === 'number' ? hex(c.primary) : c.primary,
+        isPlayer: false, getS: () => 0, getSpeed: () => rc.speed, tracker: rc.tracker, remote: rc,
+      });
+    }
+    this.race.setup('race', room.laps, racers);
+    this.playerRacer = this.race.player;
+    this.sectorCls = [null, null, null];
+    this._offTimer = 0; this._offCooldown = 0; this._wrongTimer = 0; this._wrongCooldown = 0; this._resetCooldown = 0;
+    this._limitTimer = 0; this._impactCooldown = 0; this._finishTimer = -1; this._airTime = 0;
+    this._prevVel = null;
+    this._sendT = 0;
+    this._lastSent = null;
+    this._submitted = false;
+
+    this.cams.resetRig(spawn.pos, spawn.quat);
+    const front = new THREE.Vector3(), back = new THREE.Vector3();
+    T.sampleAt(22, -T.def.pit.side * (T.halfWidth + 3.5), front);
+    front.y += 5.5;
+    T.sampleAt(-28, 0, back);
+    back.y += 0.6;
+    _fwd.set(0, 0, 1).applyQuaternion(spawn.quat);
+    const to = spawn.pos.clone().addScaledVector(_fwd, -6.6);
+    to.y += 1.95;
+    this._gridShot = { from: front, to, focus: back };
+    this.cams.setMode('grid', { instant: true });
+    this.cams.gridT = 0;
+
+    this.hud.setMode('race', room.laps, this.settings.transmission);
+    this.hud.show(true);
+    this.carAudio.setActive(true);
+    this.environment.setExcitement(1);
+    this.state.set(STATE.COUNTDOWN);
+    // all clients count down against the database clock: lights out exactly at startAt
+    const interval = 1.0, hold = 0.7;
+    const clock = () => svc.serverNow() / 1000;
+    const untilGo = (startAt - svc.serverNow()) / 1000;
+    this.countdown.start({
+      preDelay: untilGo - interval * 4 - hold,
+      interval, holdMin: hold, holdMax: hold, clock,
+      caption: rejoin ? 'REJOINING THE RACE' : `ONLINE · ${T.def.name.toUpperCase()} · ${room.laps} LAPS · ${s.players.length} DRIVERS`,
+      onLights: (n, green) => this.circuit.setStartLights(n, green),
+      onGo: () => this._go(),
+    });
+    if (untilGo < -0.5) this.countdown.update(0); // late (reconnect): go straight away
+    s.setPresence({ phase: 'race', seq: room.race_seq });
+  }
+
+  _inSession() {
+    return this.state.is(STATE.COUNTDOWN, STATE.RACING, STATE.FINISHED, STATE.PAUSED);
+  }
+
+  /** Broadcast our car: ~8-15 Hz while racing (fewer when the room is full), 1-2 Hz when parked. */
+  _onlineSend(dt, st) {
+    const s = this.net;
+    if (!s || s.status !== 'connected') return;
+    const ph = this.physics;
+    const paused = st === STATE.PAUSED;
+    const moving = Math.abs(ph.speed) > 0.3;
+    const n = Math.max(2, s.players.length);
+    const hz = paused ? 1 : st === STATE.COUNTDOWN ? 2 : moving ? Math.max(6, Math.min(15, Math.round(48 / n))) : 1;
+    this._sendT -= dt;
+    if (this._sendT > 0) return;
+    this._sendT = 1 / hz;
+    const tr = this.playerRacer.tracker;
+    const car = this.playerCar;
+    const lv = ph.body.linvel();
+    const v = (this._vSend || (this._vSend = new THREE.Vector3())).set(lv.x, lv.y, lv.z);
+    const pos = ph.currPos, quat = ph.currQuat || car.root.quaternion;
+    const flags = (paused ? FLAG.PAUSED : 0) | (tr.finished ? FLAG.FINISHED : 0);
+    const data = packState({
+      pos, quat, vel: v, speed: ph.speed, steer: ph.steerAngle, throttle: ph.throttle, brake: ph.brake, gear: ph.gear, rpm: ph.rpm,
+      progress: tr.progress(), laps: tr.lapsCompleted, flags, damageMask: damageMask(car, this.damage.wheelLost), bestLap: tr.bestLap,
+    });
+    s.sendState(data);
+  }
+
+  _onlineLocalFinish(d, pos) {
+    const s = this.net;
+    if (!s) return;
+    const tr = this.race.player.tracker;
+    const total = d.time - this.race.startTime;
+    s.sendFinish({ total, laps: tr.lapsCompleted, best: tr.bestLap, pos });
+    if (!this._submitted) {
+      this._submitted = true;
+      this.online.svc.submitResult(s.room.id, s.room.race_seq, pos, tr.bestLap, total).catch(() => {});
+      if (s.isHost) this.online.svc.setStatus(s.room.id, 'finished').catch(() => {});
+    }
+  }
+
+  /** Results rows; disconnected online rivals are marked. */
+  _classification() {
+    const rows = this.race.classification(this.raceTime);
+    if (this.mode === 'online') for (const r of rows) if (r.racer.remote && !r.racer.remote.connected && r.total == null) r.gap = 'DISCONNECTED';
+    return rows;
+  }
+
+  _disposeRemotes() {
+    if (!this.remotes) return;
+    for (const rc of this.remotes.values()) rc.dispose(this.world);
+    this.remotes = null;
+  }
+
+  /** Leave the online race: back to the lobby, or out of the server entirely. */
+  _endOnlineRace({ toLobby = false, leave = false } = {}) {
+    this._withFade(() => {
+      this.pauseMenu.hide();
+      this.results.hide();
+      this.countdown.cancel();
+      this.hud.show(false);
+      this.carAudio.setActive(false);
+      this._disposeRemotes();
+      this.mode = 'race';
+      this.state.set(STATE.MENU);
+      this._enterMenuScene();
+      this.audio.playMusic(true);
+      const s = this.net;
+      if (s && s.isHost && s.room.status !== 'waiting') this.online.svc.setStatus(s.room.id, 'waiting').catch(() => {});
+      if (s) s.setPresence({ phase: 'lobby' });
+      if (leave) {
+        this.online.leave();
+        this.menu.show(true);
+      } else if (toLobby && s) {
+        this.menu.show(false);
+        this.online.show();
+      } else this.menu.show(true);
+    });
+  }
+
+  /** The session ended under us (kicked / closed / left from the lobby). */
+  onlineLeft(msg) {
+    this.net = null;
+    if (this.mode === 'online' && this._inSession()) {
+      if (msg) this.hud.notify('SESSION ENDED', msg.toUpperCase().slice(0, 40), 'warn', 3);
+      setTimeout(() => this._endOnlineRace({}), msg ? 1800 : 0);
+    }
+  }
+
   // ------------------------------------------------------------------ race events
   _onRaceEvent(type, d) {
     const hud = this.hud;
@@ -653,6 +929,7 @@ export class Game {
   _onPlayerFinish(d) {
     const p = this.race.player;
     const pos = p.position;
+    if (this.mode === 'online') this._onlineLocalFinish(d, pos);
     this.state.set(STATE.FINISHED);
     this.physics.transmission = 'auto'; // the cool-down autopilot shifts for itself
     this.controller.autopilot = true;
@@ -671,6 +948,7 @@ export class Game {
       lapTimes: tr.lapTimes.slice(),
       newRecord: tr.bestLap != null && (prevBest == null || tr.bestLap <= prevBest),
       track: this.track.def.name,
+      online: this.mode === 'online',
     };
     this._finishTimer = 3.2;
     setTimeout(() => this.state.is(STATE.FINISHED) && this.cams.setMode('finish', { duration: 1.5 }), 1200);
@@ -694,6 +972,9 @@ export class Game {
       this._playerInfo.lateral = this._proj.lateral;
       this._playerInfo.speed = this.physics.speed;
       this.ai.fixedUpdate(dt, this._playerInfo);
+    } else if (this.mode === 'online' && this.remotes) {
+      const now = this.online.svc.serverNow();
+      for (const rc of this.remotes.values()) rc.fixedUpdate(now);
     }
     const lv0 = this.physics.body.linvel();
     const v0x = lv0.x, v0y = lv0.y, v0z = lv0.z;
@@ -851,6 +1132,18 @@ export class Game {
       }
     }
 
+    if (this.mode === 'online' && this.remotes && inSession) {
+      const now = this.online.svc.serverNow();
+      for (const rc of this.remotes.values()) {
+        rc.frameUpdate(dt, now, this.camera.position);
+        if (rc.car.root.visible) {
+          const dist = rc.car.root.position.distanceTo(carPos);
+          if (dist < nearestD) { nearestD = dist; nearestAI = rc; }
+        }
+      }
+      this._onlineSend(dt, st);
+    }
+
     if (!paused) {
       this.particles.update(dt);
       this.sparks.update(dt);
@@ -900,11 +1193,11 @@ export class Game {
       }
       if (st === STATE.FINISHED && this._finishTimer > 0) {
         this._finishTimer -= dt;
-        if (this._finishTimer <= 0) this.results.show(this._resultSummary, this.race.classification(this.raceTime));
+        if (this._finishTimer <= 0) this.results.show(this._resultSummary, this._classification());
       }
       if (this.results.visible) {
         this._resRefresh = (this._resRefresh || 0) - dt;
-        if (this._resRefresh <= 0) { this._resRefresh = 0.5; this.results.updateRows(this.race.classification(this.raceTime)); }
+        if (this._resRefresh <= 0) { this._resRefresh = 0.5; this.results.updateRows(this._classification()); }
       }
     }
 

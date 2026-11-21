@@ -334,7 +334,7 @@ export class Hungaroring {
     const white = this._mat({ color: 0xf2f2f2, roughness: 0.6, ...offsetMat(6) });
     const parts = [];
     this.gridSlots = [];
-    for (let k = 0; k < 5; k++) {
+    for (let k = 0; k < 8; k++) { // 5 for a race vs AI, up to 8 for online races
       const s = -10 - k * 8.5;
       const lat = k % 2 === 0 ? -2.8 : 2.8;
       const f = frameAt(T, s, lat);

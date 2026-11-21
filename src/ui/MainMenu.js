@@ -24,6 +24,7 @@ export class MainMenu {
         <div class="menu-buttons">
           <button class="menu-btn primary" data-act="race">Start Race <span class="hint" data-laps-hint></span></button>
           <button class="menu-btn" data-act="trial">Time Trial <span class="hint">SOLO · HOTLAP</span></button>
+          <button class="menu-btn online-btn" data-act="online">Online Racing <span class="hint">RACE YOUR FRIENDS</span></button>
           <button class="menu-btn" data-act="track">Circuit <span class="hint" data-track-hint></span></button>
           <button class="menu-btn" data-act="team">Car <span class="hint" data-team-hint></span></button>
           <button class="menu-btn" data-act="settings">Settings <span class="hint">GAMEPLAY · CONTROLS</span></button>
@@ -62,6 +63,7 @@ export class MainMenu {
   _act(a) {
     if (a === 'race') this.h.onRace();
     else if (a === 'trial') this.h.onTrial();
+    else if (a === 'online') this.h.onOnline();
     else if (a === 'settings') this.h.onSettings();
     else if (a === 'controls') this.h.onControls();
     else if (a === 'team') this.h.onTeam();
