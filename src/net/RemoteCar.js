@@ -109,9 +109,14 @@ export class RemoteCar {
 
   /** Incoming snapshot. Out-of-order / duplicate messages are dropped by sequence number. */
   push(msg, serverNow) {
-    if (msg.i !== this.sid) { this.sid = msg.i; this.lastSeq = -1; this.buf.length = 0; }
+    if (msg.i !== this.sid) { this.sid = msg.i; this.lastSeq = -1; this.buf.length = 0; this.lag = null; }
     if (msg.q <= this.lastSeq) return false;
     this.lastSeq = msg.q;
+    // observed delay = network latency + any clock error between the two players. Track its lower
+    // envelope and play back relative to it, so a clock-sync error can never leave the car behind.
+    const lat = serverNow - msg.t;
+    if (this.lag == null || lat < this.lag) this.lag = lat;
+    else this.lag += (lat - this.lag) * 0.02;
     const d = msg.d;
     this.buf.push({ t: msg.t, d });
     if (this.buf.length > MAX_BUFFER) this.buf.shift();
@@ -177,8 +182,12 @@ export class RemoteCar {
   }
 
   /** Physics step: move the kinematic body to where the car is shown. */
+  playoutTime(serverNow) {
+    return serverNow - (this.lag || 0) - this.interpDelay;
+  }
+
   fixedUpdate(serverNow) {
-    const ok = this.sample(serverNow - this.interpDelay, this.pos, this.quat);
+    const ok = this.sample(this.playoutTime(serverNow), this.pos, this.quat);
     const solid = ok && this.connected && !this.paused;
     if (solid !== this._solid) {
       this._solid = solid;
@@ -192,7 +201,7 @@ export class RemoteCar {
 
   /** Render: smooth pose for this frame. */
   frameUpdate(dt, serverNow, cameraPos) {
-    const ok = this.sample(serverNow - this.interpDelay, this.car.root.position, this.car.root.quaternion);
+    const ok = this.sample(this.playoutTime(serverNow), this.car.root.position, this.car.root.quaternion);
     const visible = ok && this.connected;
     if (visible !== this.car.root.visible) this.car.setVisible(visible);
     if (!visible) return;
